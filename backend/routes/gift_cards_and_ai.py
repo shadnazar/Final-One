@@ -26,6 +26,7 @@ import json
 import logging
 import uuid
 import hashlib
+import base64
 
 router = APIRouter(prefix="/api", tags=["gift-cards-and-product-ai"])
 logger = logging.getLogger(__name__)
@@ -900,6 +901,9 @@ class OneClickProductRequest(BaseModel):
     key_ingredients: Optional[str] = ""
     image_url: Optional[str] = None          # if admin already has an image, skip AI image
     generate_image: bool = True
+    # Optional admin-picked reference bottle photo for AI image generation. If
+    # omitted, the site-settings references / default approved bottles are used.
+    reference_image_url: Optional[str] = None
     is_active: bool = True
     # ---- Optional pre-generation specifications (considered by the AI copy + price) ----
     price_min: Optional[int] = None          # desired MRP range (INR) — lower bound
@@ -917,73 +921,173 @@ def _slugify(text: str) -> str:
     return s[:70] or f"product-{uuid.uuid4().hex[:6]}"
 
 
+# Default approved bottle references (exact bottles the brand uses). Admin can
+# override these in Admin → Settings with their own reference photos.
+_DEFAULT_REF_BOTTLES = {
+    "serum": "https://res.cloudinary.com/dcvuqcqjn/image/upload/q_auto:best,f_auto/celesta-glow/brand/brand-bottle-serum.jpg",
+    "cream": "https://res.cloudinary.com/dcvuqcqjn/image/upload/q_auto:best,f_auto/celesta-glow/brand/brand-bottle-cream.jpg",
+}
+
+# Keywords that map a product to the taller cream-style bottle (same rule the
+# rest of the pipeline uses).
+_CREAM_WORDS = (
+    "cream", "moistur", "night", "balm", "butter", "mask", "lotion", "gel",
+    "sunscreen", "spf", "eye", "ointment", "salve",
+)
+
+
+def _bottle_kind(name: str, category: str) -> str:
+    hay = f"{category or ''} {name or ''}".lower()
+    return "cream" if any(w in hay for w in _CREAM_WORDS) else "serum"
+
+
 async def _ai_generate_product_image(name: str, brand: str, category: str,
                                      ref_images: Optional[list] = None,
-                                     extra_prompt: str = "") -> Optional[str]:
-    """Render the product's hero image from an APPROVED brand bottle.
+                                     extra_prompt: str = "",
+                                     size: str = "") -> Optional[str]:
+    """Generate the product's hero image with AI (Gemini Nano Banana) using the
+    brand's reference bottle photo(s) as the visual anchor.
 
-    STRICT BRAND RULE (owner mandate, Feb 2026)
-    ===========================================
-    Generated product imagery may show ONLY the two owner-supplied bottles:
+    The bottle design is CONSTANT — the owner physically uses these bottles and
+    only swaps the printed label. So the AI is told to keep the bottle shape,
+    cap and finish pixel-faithful to the reference image and regenerate ONLY the
+    label text for THIS product (name + actives + size), on a fresh, varied,
+    photorealistic studio backdrop.
 
-      * the "ADVANCED FACE SERUM" pump bottle   → serums, toners, essences…
-      * the "ADVANCED RETINOID NIGHT CREAM" pump → creams, moisturisers, SPF…
-
-    The previous implementation asked Gemini / Pollinations to *invent* a bottle
-    from a text prompt. That is explicitly not accepted: every run produced a
-    different, non-brand bottle. Text-to-image invention is therefore removed
-    altogether — the only reliable way to guarantee the rule is to composite the
-    real approved photograph rather than hope a model reproduces it.
-
-    The output is a crisp 1400px hero on a pure-white backdrop (quality 97,
-    4:4:4 chroma) and is stored on Cloudinary under a deterministic public_id,
-    so it is sharp AND permanent.
+    Reference image priority:
+      1. ``ref_images`` passed by the caller (admin per-product pick).
+      2. Admin-configured site-settings references
+         (product_image_reference_serum_url / product_image_reference_cream_url,
+          or the single product_image_reference_url).
+      3. The two approved default bottles (serum / cream) on Cloudinary.
     """
-    try:
-        from services import brand_bottles, durable_images
-    except Exception as e:
-        logger.error(f"[img-gen] approved-bottle renderer unavailable: {e}")
+    api_key = os.environ.get("EMERGENT_LLM_KEY", "")
+    if not api_key:
+        logger.error("[img-gen] EMERGENT_LLM_KEY not configured — cannot AI-generate product image")
         return None
 
-    product_hint = {
-        "name": name,
-        "short_name": name,
-        "category": category or "",
-        "slug": _slugify(name),
-        "key_ingredients": extra_prompt or "",
-    }
-    # If the admin has uploaded a reference bottle photo (site settings), use it
-    # as the base bottle and reprint THIS product's name onto its label. This
-    # lets the owner define the exact bottle design once; every generated
-    # product reuses it with the correct label text. No AI image credits spent.
-    ref_url = None
-    try:
-        if _db is not None:
-            _ss = await _db.site_settings.find_one({"_id": "main"}, {"_id": 0, "product_image_reference_url": 1}) or {}
-            ref_url = (_ss.get("product_image_reference_url") or "").strip() or None
-    except Exception:
-        ref_url = None
+    kind = _bottle_kind(name, category)
 
-    out_bytes = None
-    if ref_url:
+    # Resolve the reference bottle URL for this product's kind.
+    ref_url = None
+    if ref_images:
+        ref_url = ref_images[0] if isinstance(ref_images, list) else ref_images
+    if not ref_url and _db is not None:
         try:
-            import httpx as _httpx
-            async with _httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _hc:
-                _r = await _hc.get(ref_url)
-                _r.raise_for_status()
-                out_bytes = brand_bottles.hero_bytes_from_reference(product_hint, _r.content)
-        except Exception as e:
-            logger.warning(f"[img-gen] reference-bottle render failed, falling back to approved master: {e}")
-            out_bytes = None
+            _ss = await _db.site_settings.find_one(
+                {"_id": "main"},
+                {"_id": 0,
+                 "product_image_reference_serum_url": 1,
+                 "product_image_reference_cream_url": 1,
+                 "product_image_reference_url": 1},
+            ) or {}
+            ref_url = (
+                (_ss.get(f"product_image_reference_{kind}_url") or "").strip()
+                or (_ss.get("product_image_reference_url") or "").strip()
+                or None
+            )
+        except Exception:
+            ref_url = None
+    if not ref_url:
+        ref_url = _DEFAULT_REF_BOTTLES.get(kind) or _DEFAULT_REF_BOTTLES["serum"]
+
+    # Build the exact label copy the AI must print. extra_prompt here is the
+    # CLEAN comma-separated actives (no prose sentence).
+    product_name = (name or "Advanced Formula").strip()
+    brand_name = (brand or "Celesta Glow").strip()
+    actives = re.sub(r"\s+", " ", (extra_prompt or "")).strip()
+    actives = re.sub(r"\s*\d+(\.\d+)?%", "", actives)  # strip % strengths for a clean label
+    size_txt = (size or "").strip()
+
+    # A rotating backdrop style so every one-click generation looks different.
+    import hashlib as _hl
+    styles = [
+        "soft morning light, a smooth stone slab and a few fresh green leaves at the base",
+        "a clean marble surface with delicate clear glass water-droplet orbs and a gentle pastel gradient",
+        "a minimal beige podium, soft shadow, a faint eucalyptus sprig at the edge",
+        "a bright seamless white studio sweep with a subtle silk drape and warm diffused light",
+        "a fresh aqua-toned backdrop with floating clear gel droplets and soft highlights",
+    ]
+    style = styles[int(_hl.md5(product_name.encode()).hexdigest(), 16) % len(styles)]
+
+    label_lines = [
+        f"Brand (small caps, top of label): {brand_name.upper()}",
+        f"Product name (largest, bold, centred): {product_name.upper()}",
+    ]
+    if actives:
+        label_lines.append(f"Key actives (small caps, centred): {actives.upper()}")
+    label_lines.append("Footer (small): FOR ALL SKIN TYPES")
+    if size_txt:
+        label_lines.append(f"Size (small, bottom): {size_txt}")
+    label_block = "\n".join("  - " + ln for ln in label_lines)
+
+    # Download the reference bottle (bytes → base64 image input for the AI).
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _hc:
+            _r = await _hc.get(ref_url)
+            _r.raise_for_status()
+            ref_bytes = _r.content
+    except Exception as e:
+        logger.error(f"[img-gen] could not download reference bottle ({ref_url}): {e}")
+        return None
+    ref_b64 = base64.b64encode(ref_bytes).decode("utf-8")
+
+    prompt = (
+        "Recreate the attached reference product photo as a brand-new, high-end skincare "
+        "advertisement image.\n"
+        "BOTTLE: Keep the EXACT same bottle from the reference — identical shape, clear pump cap, "
+        "finish and proportions. Do NOT invent a different bottle.\n"
+        "FRAMING (critical): place the bottle DEAD-CENTRE in the frame with even space on the left and "
+        "right. The bottle must be the single central subject.\n"
+        "LABEL: The bottle's existing printed text is only a placeholder. COMPLETELY REPLACE it with "
+        "a single clean, minimal, premium label that reads ONLY the text below — first erase every "
+        "trace of the old wording, then print the new wording (never overlap old and new text):\n"
+        f"{label_block}\n"
+        "TYPE & PLACEMENT (very important): use a clean sans-serif typeface and CENTRE the whole label "
+        "block on the bottle's front face with comfortable margins on BOTH the left and right sides of "
+        "the bottle. Keep the font modest so EVERY word is fully visible — the product name, actives, "
+        "footer and size must all fit completely inside the bottle's front label area, with NOTHING "
+        "cropped at the edges, perfectly legible and correctly spelled.\n"
+        f"SCENE: Place the bottle on a fresh photorealistic studio backdrop — {style} — bright and "
+        "airy, high resolution, editorial quality. No watermark, no extra words, no other products."
+    )
+
+    # STRICT: image generation uses ONLY the direct GEMINI API KEY (Google GenAI
+    # SDK, model gemini-2.5-flash-image = "Nano Banana"), with the reference
+    # bottle as the image input. No other provider is used.
+    out_bytes = None
+    mime = "image/png"
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key:
+        logger.error("[img-gen] GEMINI_API_KEY not configured — product image generation requires it")
+        return None
+    try:
+        import asyncio as _asyncio
+        from google import genai
+        from google.genai import types as _gtypes
+        client = genai.Client(api_key=gemini_key)
+        parts = [prompt, _gtypes.Part.from_bytes(data=ref_bytes, mime_type="image/jpeg")]
+
+        def _gen():
+            return client.models.generate_content(model="gemini-2.5-flash-image", contents=parts)
+
+        resp = await _asyncio.to_thread(_gen)
+        for part in (resp.candidates[0].content.parts if getattr(resp, "candidates", None) else []):
+            inline = getattr(part, "inline_data", None)
+            if inline and getattr(inline, "data", None):
+                out_bytes = inline.data
+                mime = inline.mime_type or "image/png"
+                break
+    except Exception as e:
+        logger.error(f"[img-gen] Gemini image generation failed for '{product_name}': {str(e)[:160]}")
 
     if not out_bytes:
-        try:
-            out_bytes = brand_bottles.hero_bytes(product_hint)
-        except Exception as e:
-            logger.error(f"[img-gen] approved-bottle render failed for '{name}': {e}")
-            return None
+        logger.error(f"[img-gen] Gemini returned no image for '{product_name}'")
+        return None
 
     try:
+        from services import durable_images
         return await durable_images.save_image(
             _db, out_bytes,
             slug=_slugify(name), tag="hero",
@@ -1156,12 +1260,14 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
 
     image_url = body.image_url
     if not image_url and body.generate_image:
+        # Clean actives only (comma-separated) for the label — no prose sentence.
         _img_ings = content.get("key_ingredients", "") or (body.key_ingredients or "")
-        _img_extra = (f"The formula's hero actives are: {_img_ings}. Reflect the product's essence "
-                      "(colour/texture cues) subtly through the packaging design." if _img_ings else "")
+        _img_size = content.get("size", "") or (body.size_hint or "")
         try:
+            _refs = [body.reference_image_url] if body.reference_image_url else None
             image_url = await _ai_generate_product_image(
-                name, brand, category_slug or subcategory_slug, extra_prompt=_img_extra)
+                name, brand, category_slug or subcategory_slug,
+                ref_images=_refs, extra_prompt=_img_ings, size=_img_size)
         except Exception as e:
             logger.warning(f"[one-click] image generation failed (non-fatal): {e}")
             image_url = None

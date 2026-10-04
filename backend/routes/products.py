@@ -2239,6 +2239,9 @@ class SiteSettingsUpdate(BaseModel):
     # Admin-supplied reference bottle photo used as the base for one-click
     # product image generation. The product's own name is reprinted onto it.
     product_image_reference_url: Optional[str] = None
+    # Kind-specific references so the AI uses the correct bottle (serum vs cream).
+    product_image_reference_serum_url: Optional[str] = None
+    product_image_reference_cream_url: Optional[str] = None
 
 
 @router.get("/site-settings")

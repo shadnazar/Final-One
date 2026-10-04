@@ -42,14 +42,17 @@ BOTTLES = {
     "serum": {
         "file": os.path.join(BRAND_DIR, "serum_bottle.jpg"),
         "url": CLOUD + "brand-bottle-serum.jpg",
-        # Label text block geometry on the 1200x1200 master, as fractions.
-        # (left, top, right, bottom) of the printed label area we may overwrite.
-        "label_box": (0.40, 0.49, 0.60, 0.88),
+        # Label text block geometry as fractions of the TRIMMED bottle
+        # (~292x885 RGBA after background cut-out + tight crop). The printed
+        # copy spans most of the body width, so erase generously.
+        "label_box": (0.15, 0.44, 0.84, 0.96),
     },
     "cream": {
         "file": os.path.join(BRAND_DIR, "cream_bottle.jpg"),
         "url": CLOUD + "brand-bottle-cream.jpg",
-        "label_box": (0.46, 0.43, 0.63, 0.88),
+        # TRIMMED cream (~316x1122). The vertical "CELESTA GLOW" brand text sits
+        # on the LEFT and is KEPT; only the changeable centre copy is overwritten.
+        "label_box": (0.40, 0.42, 0.86, 0.93),
     },
 }
 
@@ -176,14 +179,23 @@ def relabel(bottle: Image.Image, kind: str, product: dict) -> Image.Image:
     fl, ft, fr, fb = BOTTLES[kind]["label_box"]
     x0, y0, x1, y1 = int(W0 * fl), int(H0 * ft), int(W0 * fr), int(H0 * fb)
     box_w = x1 - x0
+    cx = (x0 + x1) / 2
+    # Text is drawn inside a slightly narrower, centred band so long words never
+    # spill past the bottle's curved edges (the erase box stays full-width).
+    inset = int(box_w * 0.12)
+    text_w = box_w - 2 * inset
 
     layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
 
     # Erase the master's printed copy using the bottle's own body colour so the
-    # patch is invisible, then print the new text over it.
-    body = im.convert("RGB").getpixel((int((x0 + x1) / 2), int(y0 - H0 * 0.03)))
-    d.rectangle([x0 - 4, y0 - 4, x1 + 4, y1 + 4], fill=body + (255,))
+    # patch is invisible. Sample the body just above the label, then clamp each
+    # channel bright so a shadowed/grey sample can never produce a visible patch.
+    sx = int((x0 + x1) / 2)
+    sy = max(0, int(y0 - H0 * 0.03))
+    _r, _g, _b = im.convert("RGB").getpixel((sx, sy))
+    body = (max(_r, 244), max(_g, 244), max(_b, 244))
+    d.rectangle([x0 - 8, y0 - 8, x1 + 8, y1 + 8], fill=body + (255,))
 
     name = (product.get("short_name") or product.get("name") or "Advanced Formula")
     name = re.sub(r"^celesta\s*glow\s*", "", str(name), flags=re.I).strip() or "Advanced Formula"
@@ -195,27 +207,27 @@ def relabel(bottle: Image.Image, kind: str, product: dict) -> Image.Image:
 
     y = y0 + 4
     # Product name — green, bold, centred, upper-case, wrapped.
-    f_name = _fit_font(d, "ADVANCED", F_BOLD, box_w, 30, 13)
-    for ln in _wrap(d, name.upper(), f_name, box_w):
+    f_name = _fit_font(d, "ADVANCED", F_BOLD, text_w, 30, 12)
+    for ln in _wrap(d, name.upper(), f_name, text_w):
         tw = d.textbbox((0, 0), ln, font=f_name)[2]
-        d.text(((x0 + x1 - tw) / 2, y), ln, font=f_name, fill=GREEN + (255,))
+        d.text((cx - tw / 2, y), ln, font=f_name, fill=GREEN + (255,))
         y += f_name.size + 3
     y += 8
 
     # Hero actives — small grey caps.
     if actives:
-        f_act = _fit_font(d, "NIACINAMIDE +", F_REG, box_w, 17, 9)
-        for ln in _wrap(d, actives.upper(), f_act, box_w)[:4]:
+        f_act = _fit_font(d, "NIACINAMIDE +", F_REG, text_w, 16, 8)
+        for ln in _wrap(d, actives.upper(), f_act, text_w)[:4]:
             tw = d.textbbox((0, 0), ln, font=f_act)[2]
-            d.text(((x0 + x1 - tw) / 2, y), ln, font=f_act, fill=GREY + (255,))
+            d.text((cx - tw / 2, y), ln, font=f_act, fill=GREY + (255,))
             y += f_act.size + 3
         y += 8
 
     # Footer: "FOR ALL SKIN TYPES" + pack size.
-    f_ft = _fit_font(d, "FOR ALL SKIN TYPES", F_REG, box_w, 14, 8)
+    f_ft = _fit_font(d, "FOR ALL SKIN TYPES", F_REG, text_w, 13, 8)
     for ln in ["FOR ALL SKIN TYPES"] + ([size_txt] if size_txt else []):
         tw = d.textbbox((0, 0), ln, font=f_ft)[2]
-        d.text(((x0 + x1 - tw) / 2, min(y, y1 - f_ft.size)), ln, font=f_ft, fill=GREEN + (255,))
+        d.text((cx - tw / 2, min(y, y1 - f_ft.size)), ln, font=f_ft, fill=GREEN + (255,))
         y += f_ft.size + 4
 
     # Keep the label strictly inside the bottle silhouette.
