@@ -449,59 +449,220 @@ function PlanCard({ plan }) {
   );
 }
 
+/* --- Daily scorecard: score ring + 30-day progress + streak --- */
+function DayScoreCard({ day, score }) {
+  const progressDay = day?.progress_day || 1;
+  const total = day?.total_days || 30;
+  const streak = day?.streak || 0;
+  const completedDays = day?.completed_days || 0;
+  const pct = Math.min(100, Math.round((completedDays / total) * 100));
+  return (
+    <div className="relative overflow-hidden rounded-3xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-amber-50 p-5" data-testid="day-scorecard">
+      <div className="absolute -right-8 -top-10 h-32 w-32 rounded-full bg-emerald-200/30 blur-2xl" />
+      <div className="relative flex items-center gap-4">
+        <ScoreRing score={score || 0} size={84} />
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-700">Your Skin Score</p>
+          <p className="text-[13px] text-stone-500 leading-snug">Keep glowing — follow today's ritual and log a selfie to unlock tomorrow.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-black text-amber-800"><CalendarDays size={12} /> Day {progressDay} of {total}</span>
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-black text-emerald-800"><Sparkles size={12} /> {streak}-day streak</span>
+          </div>
+        </div>
+      </div>
+      <div className="relative mt-4">
+        <div className="flex items-center justify-between text-[10px] font-bold text-stone-400 mb-1">
+          <span>Progress</span><span>{completedDays}/{total} days</span>
+        </div>
+        <div className="h-2.5 rounded-full bg-white/70 overflow-hidden ring-1 ring-emerald-100">
+          <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-emerald-500 to-amber-400 transition-all" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProgressPanel({ token, plan }) {
+  const [day, setDay] = useState(null);
   const [scans, setScans] = useState([]);
   const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await axios.get(`${API}/api/tracker/scans`, authHeader(token));
-        setScans(r.data.scans || []);
-      } catch {} finally { setLoading(false); }
-    })();
+  const [completed, setCompleted] = useState({});
+  const [photo, setPhoto] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [celebrate, setCelebrate] = useState('');
+  const [err, setErr] = useState('');
+  const fileRef = useRef(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [d, s] = await Promise.all([
+        axios.get(`${API}/api/tracker/day`, authHeader(token)).catch(() => ({ data: {} })),
+        axios.get(`${API}/api/tracker/scans`, authHeader(token)).catch(() => ({ data: {} })),
+      ]);
+      setDay(d.data || {});
+      setCompleted((d.data && d.data.completed) || {});
+      setScans((s.data && s.data.scans) || []);
+    } finally { setLoading(false); }
   }, [token]);
+  useEffect(() => { load(); }, [load]);
+
+  const tasks = React.useMemo(() => {
+    const am = (day?.am_routine || []).map((s, i) => ({ key: `am-${i}`, slot: 'AM', ...s }));
+    const pm = (day?.pm_routine || []).map((s, i) => ({ key: `pm-${i}`, slot: 'PM', ...s }));
+    return [...am, ...pm];
+  }, [day]);
+
+  const doneCount = tasks.filter((t) => completed[t.key]).length;
+  const allDone = tasks.length > 0 && doneCount === tasks.length;
+  const todayDone = !!day?.today_done;
+
+  const toggle = (key) => setCompleted((c) => ({ ...c, [key]: !c[key] }));
+
+  const pickPhoto = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setPhoto(await fileToDataUrl(f));
+  };
+
+  const submitDay = async () => {
+    if (!photo) { setErr("Add today's photo to unlock the next day."); return; }
+    setErr(''); setSubmitting(true);
+    try {
+      const r = await axios.post(`${API}/api/tracker/day/complete`,
+        { completed, photo_base64: photo }, authHeader(token));
+      const pd = r.data?.progress_day || (day?.progress_day || 1);
+      setCelebrate(r.data?.plan_complete
+        ? `Incredible — you completed all 30 days! 🌿`
+        : `Day ${day?.progress_day || pd} complete! Day ${Math.min(pd, day?.total_days || 30)} is unlocked.`);
+      setPhoto(null);
+      await load();
+    } catch (e) {
+      setErr(e.response?.data?.detail || 'Could not save today. Please try again.');
+    } finally { setSubmitting(false); }
+  };
 
   if (loading) return <div className="py-16 text-center text-stone-400"><Loader2 className="animate-spin mx-auto" /></div>;
-  if (!scans.length) return (
+
+  const latestScore = day?.skin_score || scans[0]?.skin_score || 0;
+  const hasScan = day?.has_scan || scans.length > 0;
+
+  if (!hasScan) return (
     <div className="space-y-4">
       <PlanCard plan={plan} />
       <div className="bg-white rounded-2xl border border-stone-100 p-10 text-center">
         <TrendingUp size={28} className="text-stone-300 mx-auto mb-2" />
-        <p className="text-sm text-stone-500">No scans yet. Run your first skin scan to start tracking progress.</p>
+        <p className="text-sm text-stone-500">No scan yet. Run your first skin scan to build your 30-day plan and start tracking progress.</p>
       </div>
     </div>
   );
+
   const max = Math.max(...scans.map((s) => s.skin_score || 0), 100);
+
   return (
-    <div className="space-y-4">
-      <PlanCard plan={plan} />
-      <div className="bg-white rounded-2xl border border-stone-100 p-4">
-        <p className="text-sm font-black text-stone-900 mb-3">Skin Score over time</p>
-        <div className="flex items-end gap-2 h-32">
-          {[...scans].reverse().map((s) => (
-            <div key={s.id} className="flex-1 flex flex-col items-center gap-1">
-              <div className="w-full bg-emerald-100 rounded-t-md flex items-end justify-center" style={{ height: `${((s.skin_score || 0) / max) * 100}%` }}>
-                <div className="w-full bg-gradient-to-t from-emerald-600 to-emerald-400 rounded-t-md" style={{ height: '100%' }} />
-              </div>
-              <span className="text-[10px] font-bold text-stone-600">{s.skin_score}</span>
-              <span className="text-[9px] text-stone-400">{(s.date || '').slice(5)}</span>
-            </div>
-          ))}
+    <div className="space-y-5">
+      <DayScoreCard day={day} score={latestScore} />
+
+      {celebrate && (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800 flex items-center gap-2" data-testid="day-celebrate">
+          <Check size={16} /> {celebrate}
         </div>
-      </div>
-      <div className="grid sm:grid-cols-2 gap-3">
-        {scans.map((s) => (
-          <div key={s.id} className="bg-white rounded-2xl border border-stone-100 p-3 flex gap-3">
-            <div className="w-16 h-16 rounded-xl overflow-hidden bg-stone-100 shrink-0">
-              {s.photo_url ? <img src={s.photo_url} alt="" className="w-full h-full object-cover" /> : <CalendarDays className="text-stone-300 m-auto mt-5" size={20} />}
-            </div>
-            <div className="min-w-0">
-              <p className="text-[12px] font-bold text-stone-800">Score {s.skin_score}/100 · <span className="text-stone-400 font-medium">{s.date}</span></p>
-              <p className="text-[12px] text-stone-500 line-clamp-2">{s.summary || s.personalized_tip}</p>
-            </div>
+      )}
+
+      {/* ---- Today's ritual: tick each step, then share a selfie ---- */}
+      {tasks.length > 0 && (
+        <div className="bg-white rounded-3xl border border-stone-100 p-5" data-testid="today-ritual">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <p className="text-sm font-black text-stone-900">Today&apos;s Ritual · Day {day?.progress_day || 1}</p>
+            <span className="text-[11px] font-black text-emerald-700">{doneCount}/{tasks.length} done</span>
           </div>
-        ))}
-      </div>
+          <p className="text-[12px] text-stone-500 mb-4">Tick off each step, then share today&apos;s photo to unlock tomorrow&apos;s plan.</p>
+
+          <div className="space-y-2.5">
+            {tasks.map((t) => {
+              const on = !!completed[t.key];
+              return (
+                <button
+                  key={t.key}
+                  onClick={() => !todayDone && toggle(t.key)}
+                  disabled={todayDone}
+                  data-testid={`ritual-step-${t.key}`}
+                  className={`w-full flex items-start gap-3 rounded-2xl border p-3 text-left transition-all ${on ? 'border-emerald-200 bg-emerald-50' : 'border-stone-200 bg-white hover:bg-stone-50'} ${todayDone ? 'opacity-70 cursor-default' : ''}`}
+                >
+                  <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg ${t.slot === 'AM' ? 'bg-amber-100 text-amber-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                    {t.slot === 'AM' ? <Sun size={13} /> : <Moon size={13} />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13px] font-bold text-stone-800">{t.step}{t.product ? <span className="font-medium text-emerald-700"> · {t.product}</span> : null}</span>
+                    {t.how && <span className="block text-[12px] text-stone-500">{t.how}</span>}
+                  </span>
+                  <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${on ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-stone-300'}`}>
+                    {on && <Check size={12} />}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Share today's photo — unlocks after all steps done */}
+          <div className="mt-5 rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4">
+            {todayDone ? (
+              <div className="flex items-center gap-3">
+                {day?.today_photo
+                  ? <img src={day.today_photo} alt="today" className="h-14 w-14 rounded-xl object-cover" />
+                  : <span className="flex h-14 w-14 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600"><Check size={20} /></span>}
+                <div>
+                  <p className="text-[13px] font-black text-emerald-800">Today&apos;s photo saved ✓</p>
+                  <p className="text-[12px] text-stone-500">Come back tomorrow for Day {Math.min((day?.progress_day || 1) + 1, day?.total_days || 30)}.</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <p className="text-[13px] font-black text-amber-900 flex items-center gap-1.5"><Camera size={15} /> Share today&apos;s photo</p>
+                <p className="text-[12px] text-stone-500 mt-0.5 mb-3">{allDone ? 'All steps done! Add a selfie to log Day ' + (day?.progress_day || 1) + ' and unlock tomorrow.' : 'Finish all the steps above, then add a front selfie here.'}</p>
+                <input ref={fileRef} type="file" accept="image/*" capture="user" onChange={pickPhoto} className="hidden" />
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                  {photo && <img src={photo} alt="preview" className="h-16 w-16 rounded-xl object-cover" />}
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    disabled={!allDone}
+                    data-testid="day-pick-photo"
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-300 bg-white px-4 py-2.5 text-[13px] font-black text-amber-800 disabled:opacity-50"
+                  >
+                    <Upload size={15} /> {photo ? 'Change photo' : 'Add today\u2019s photo'}
+                  </button>
+                  <button
+                    onClick={submitDay}
+                    disabled={!allDone || !photo || submitting}
+                    data-testid="day-complete-btn"
+                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 px-4 py-2.5 text-[13px] font-black text-white shadow-lg shadow-emerald-500/30 disabled:opacity-50"
+                  >
+                    {submitting ? <><Loader2 size={15} className="animate-spin" /> Saving…</> : <>Complete Day &amp; Unlock Next <ArrowRight size={14} /></>}
+                  </button>
+                </div>
+                {err && <p className="mt-2 text-[12px] font-bold text-rose-600">{err}</p>}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ---- Score history ---- */}
+      {scans.length > 0 && (
+        <div className="bg-white rounded-2xl border border-stone-100 p-4">
+          <p className="text-sm font-black text-stone-900 mb-3">Skin Score over time</p>
+          <div className="flex items-end gap-2 h-32">
+            {[...scans].reverse().map((s) => (
+              <div key={s.id} className="flex-1 flex flex-col items-center gap-1">
+                <div className="w-full bg-emerald-100 rounded-t-md flex items-end justify-center" style={{ height: `${((s.skin_score || 0) / max) * 100}%` }}>
+                  <div className="w-full bg-gradient-to-t from-emerald-600 to-emerald-400 rounded-t-md" style={{ height: '100%' }} />
+                </div>
+                <span className="text-[10px] font-bold text-stone-600">{s.skin_score}</span>
+                <span className="text-[9px] text-stone-400">{(s.date || '').slice(5)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

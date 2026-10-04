@@ -529,9 +529,11 @@ export default function RoutinePage() {
           <button
             onClick={startJourney}
             data-testid="start-journey-btn"
-            className="mt-6 w-full relative group bg-gradient-to-r from-amber-300 via-amber-400 to-yellow-500 text-amber-950 font-black py-4 rounded-2xl text-sm tracking-wide shadow-2xl shadow-amber-500/40 hover:shadow-amber-400/60 transition-all hover:-translate-y-0.5 active:scale-[0.99] flex items-center justify-center gap-2 overflow-hidden ring-1 ring-amber-200/60"
+            className="mt-6 w-full relative group bg-gradient-to-r from-amber-300 via-amber-400 to-yellow-500 text-amber-950 font-black py-3.5 px-4 rounded-2xl text-[13px] sm:text-sm tracking-wide shadow-2xl shadow-amber-500/40 hover:shadow-amber-400/60 transition-all hover:-translate-y-0.5 active:scale-[0.99] flex items-center justify-center gap-2 overflow-hidden ring-1 ring-amber-200/60"
           >
-            <Sparkles size={18} /> Start Your 30 Days Complete Routine Plan <ArrowRight size={16} className="transition-transform group-hover:translate-x-1" />
+            <Sparkles size={16} className="shrink-0" />
+            <span className="leading-tight text-center whitespace-nowrap">Start Your 30 Days Plan</span>
+            <ArrowRight size={16} className="shrink-0 transition-transform group-hover:translate-x-1" />
           </button>
           <p className="text-center text-[11px] text-white/40 mt-2">First 30 days free · Log in on the tracker and your plan is built there</p>
 

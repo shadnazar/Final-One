@@ -794,12 +794,24 @@ async def tracker_day(authorization: Optional[str] = Header(None)):
     pm = (latest or {}).get("pm_routine") or []
     today_doc = await db.tracker_days.find_one({"email": email, "date": date_key}, {"_id": 0}) or {}
     streak = await db.tracker_days.count_documents({"email": email, "any_done": True})
+    # Photo-verified completed days drive the 30-day progression: each day the
+    # user finishes their routine + shares a selfie unlocks the next day's plan.
+    completed_days = await db.tracker_days.count_documents(
+        {"email": email, "photo_url": {"$exists": True, "$ne": None}}
+    )
+    total_days = 30
+    today_done = bool(today_doc.get("photo_url"))
+    progress_day = min(completed_days + (0 if today_done else 1), total_days)
 
     return {
         "success": True,
         "has_scan": bool(latest),
         "day_number": day_number,
         "date": date_key,
+        "completed_days": completed_days,
+        "total_days": total_days,
+        "progress_day": max(1, progress_day),
+        "today_done": today_done,
         "am_routine": am,
         "pm_routine": pm,
         "diet": (latest or {}).get("diet", []),
@@ -868,8 +880,15 @@ async def tracker_day_complete(req: DayCompleteRequest, authorization: Optional[
             pass
     await db.trackers.update_one({"email": email}, {"$set": {"last_log_at": _iso(now)}})
     streak = await db.tracker_days.count_documents({"email": email, "any_done": True})
+    completed_days = await db.tracker_days.count_documents(
+        {"email": email, "photo_url": {"$exists": True, "$ne": None}}
+    )
+    total_days = 30
     return {"success": True, "date": date_key, "day_number": day_number,
             "photo_url": photo_url, "streak": streak,
+            "completed_days": completed_days, "total_days": total_days,
+            "progress_day": min(completed_days + 1, total_days),
+            "plan_complete": completed_days >= total_days,
             "subscription_due": day_number > FREE_DAYS}
 
 

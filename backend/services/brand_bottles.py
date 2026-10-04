@@ -249,14 +249,19 @@ def resolve(product: dict, relabelled: bool = False) -> Image.Image:
     return out
 
 
-def hero_bytes(product: dict, size: int = 1400) -> bytes:
+def hero_bytes(product: dict, size: int = 2048) -> bytes:
     """High-quality hero product shot: approved bottle, pure-white backdrop.
 
     This is the FIRST product image. It is rendered from the full-resolution
     master with LANCZOS and saved at quality 97 / 4:4:4 chroma so it stays
     razor sharp instead of the soft, over-compressed shot shipped before.
+
+    The bottle silhouette / cap / finish stay pixel-identical to the approved
+    master; only the printed LABEL TEXT is re-rendered to carry THIS product's
+    name + actives (``relabelled=True``), so every generated image shows the
+    correct product name on the bottle.
     """
-    bottle = resolve(product)
+    bottle = resolve(product, relabelled=True)
     canvas = Image.new("RGB", (size, size), (255, 255, 255))
     # Bottle occupies ~82% of the frame height, optically centred.
     target_h = int(size * 0.82)
