@@ -230,10 +230,27 @@ test_plan:
         -agent: "testing"
         -comment: "✅ PASSED - Tracker daily loop endpoints working correctly. AUTH flow: POST /api/auth/send-otp → read OTP from MongoDB customer_otps collection → POST /api/auth/verify-otp returns Bearer token. GET /api/tracker/day returns all required fields: completed_days (0), total_days (30), progress_day (1), today_done (false). POST /api/tracker/day/complete with photo successfully advances the plan: completed_days incremented from 0→1, progress_day advanced from 1→2, photo uploaded to Cloudinary. The 30-day progression logic is working as expected. Plan completion tracking (plan_complete field) is present and correct."
 
+  - task: "Site settings: other_brands_in_stock + product_image_reference_url round-trip"
+    implemented: true
+    working: true
+    file: "routes/products.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Added product_image_reference_url to SiteSettingsUpdate. Verify PUT /api/admin/site-settings (X-Admin-Token: celestaglow2024) with {other_brands_in_stock:true, product_image_reference_url:'https://example.com/x.jpg'} persists and GET /api/site-settings returns both. No LLM credits involved."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED - Site settings round-trip test completed successfully. All 4 steps verified: (1) PUT /api/admin/site-settings with other_brands_in_stock=true and product_image_reference_url='https://res.cloudinary.com/dcvuqcqjn/image/upload/celesta-glow/brand/brand-bottle-cream.jpg' returned 200 with success=true. (2) GET /api/site-settings confirmed both fields persisted correctly (other_brands_in_stock=true, product_image_reference_url matches expected URL). (3) PUT again with other_brands_in_stock=false and product_image_reference_url='' returned 200 with success=true. (4) GET again confirmed both fields updated correctly (other_brands_in_stock=false, product_image_reference_url=''). No LLM credits used. Backend API working as expected."
+
 agent_communication:
     -agent: "main"
-    -message: "Fixed reported bugs. Please test ONLY these two backend items: (1) One-click product image generation — verify 2048px hi-res image + product name relabeled on bottle (make just ONE generation call, it uses a little Gemini credit). (2) Tracker daily loop endpoints /tracker/day and /tracker/day/complete return completed_days/progress_day and advance the 30-day plan when a photo is logged. For tracker auth, retrieve the OTP from Mongo collection customer_otps. The routine mobile-button + Progress-tab UI are frontend-only changes (not for this backend run). Admin password is 'celestaglow2024'. Razorpay is LIVE — do not complete real payments."
+    -message: "New round: (1) moved Other Brands toggle off the homepage into Admin→Settings; (2) added admin-configurable product_image_reference_url used as the base bottle for one-click image gen (reference render verified locally at 2048px); (3) made customer OTP session resilient (only logout on 401/403). Please run ONLY a no-credit backend test: the site-settings round-trip task above (PUT then GET). Do NOT call any LLM/image-gen endpoint this round to conserve credits. Admin password celestaglow2024."
     -agent: "testing"
     -message: "✅ ALL BACKEND TESTS PASSED (6/6). Tested: Products catalog (list + detail), Razorpay order creation (LIVE keys), COD order creation with valid pincode, Consultation/Lead submit, and AI Skin Analyzer. All endpoints respond correctly with valid data. No critical issues found. Backend is production-ready."
     -agent: "testing"
     -message: "✅ BOTH BUG FIXES VERIFIED (2/2). FIX 1: One-click product image generation now renders at 2048x2048px (verified with actual image fetch) and successfully creates products with high-res hero images. FIX 2: Tracker daily loop endpoints (/tracker/day and /tracker/day/complete) return all required fields (completed_days, total_days=30, progress_day, today_done, plan_complete) and correctly advance the 30-day plan when a photo is submitted. Both fixes are production-ready."
+    -agent: "testing"
+    -message: "✅ SITE SETTINGS ROUND-TRIP TEST PASSED. Tested PUT /api/admin/site-settings and GET /api/site-settings with both other_brands_in_stock and product_image_reference_url fields. All 4 test steps passed: (1) PUT with values, (2) GET verified persistence, (3) PUT with cleared values, (4) GET verified updates. No LLM credits used. Backend API working correctly."

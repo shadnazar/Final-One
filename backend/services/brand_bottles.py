@@ -272,3 +272,31 @@ def hero_bytes(product: dict, size: int = 2048) -> bytes:
     buf = io.BytesIO()
     canvas.save(buf, "JPEG", quality=97, subsampling=0, optimize=True, progressive=True)
     return buf.getvalue()
+
+
+def hero_bytes_from_reference(product: dict, ref_bytes: bytes, size: int = 2048) -> bytes:
+    """Render a hero product shot using an ADMIN-SUPPLIED reference bottle photo
+    as the base, then reprint THIS product's own name / actives onto its label.
+
+    This is how a shop owner says "use *this* bottle design" — they upload one
+    clean reference photo of their bottle (white studio backdrop) and every
+    generated product reuses that exact bottle, with only the printed label text
+    swapped to the correct product name. No AI image credits are spent and the
+    label text is always crisp + correct (drawn with Pillow).
+    """
+    im = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
+    # Cut the studio backdrop so the bottle composites cleanly onto white.
+    cut = _trim(_alpha_cutout(im))
+    # Pick the label-box geometry closest to this product's bottle kind.
+    kind = kind_for(product or {})
+    bottle = relabel(cut, kind, product or {})
+
+    canvas = Image.new("RGB", (size, size), (255, 255, 255))
+    target_h = int(size * 0.82)
+    scale = target_h / bottle.height
+    nw = max(1, int(bottle.width * scale))
+    b = bottle.resize((nw, target_h), Image.LANCZOS)
+    canvas.paste(b, (int((size - nw) / 2), int((size - target_h) / 2)), b)
+    buf = io.BytesIO()
+    canvas.save(buf, "JPEG", quality=97, subsampling=0, optimize=True, progressive=True)
+    return buf.getvalue()

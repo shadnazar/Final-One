@@ -2236,6 +2236,9 @@ class SiteSettingsUpdate(BaseModel):
     # customer is bounced back to the homepage. When True, they can be
     # purchased normally.
     other_brands_in_stock: Optional[bool] = None
+    # Admin-supplied reference bottle photo used as the base for one-click
+    # product image generation. The product's own name is reprinted onto it.
+    product_image_reference_url: Optional[str] = None
 
 
 @router.get("/site-settings")

@@ -10,7 +10,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Cloud, Save, KeyRound, CheckCircle2, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, Cloud, Save, KeyRound, CheckCircle2, AlertCircle, Eye, EyeOff, Package, Image as ImageIcon, Upload, Loader2 } from 'lucide-react';
 import { getAdminToken, clearAdminToken } from '../../utils/adminAuth';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -30,6 +30,13 @@ export default function AdminSettings() {
   const [pwSaving, setPwSaving] = useState(false);
   const [pwMsg, setPwMsg] = useState({ type: '', text: '' });
 
+  // Storefront state (other-brands availability + product-image reference)
+  const [otherBrands, setOtherBrands] = useState(null); // null=loading
+  const [obSaving, setObSaving] = useState(false);
+  const [refUrl, setRefUrl] = useState('');
+  const [refUploading, setRefUploading] = useState(false);
+  const [refMsg, setRefMsg] = useState({ type: '', text: '' });
+
   useEffect(() => {
     if (!token) {
       navigate('/admin');
@@ -48,8 +55,64 @@ export default function AdminSettings() {
       } catch {
         // ignore
       }
+      try {
+        const s = await axios.get(`${API}/site-settings`);
+        setOtherBrands(!!s.data?.other_brands_in_stock);
+        setRefUrl(s.data?.product_image_reference_url || '');
+      } catch {
+        setOtherBrands(false);
+      }
     })();
   }, [token, navigate]);
+
+  const toggleOtherBrands = async () => {
+    if (otherBrands === null) return;
+    const next = !otherBrands;
+    setObSaving(true);
+    setOtherBrands(next);
+    try {
+      await axios.put(`${API}/admin/site-settings`, { other_brands_in_stock: next }, { headers: { 'X-Admin-Token': token } });
+    } catch (err) {
+      setOtherBrands(!next); // revert
+    } finally {
+      setObSaving(false);
+    }
+  };
+
+  const uploadReference = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setRefMsg({ type: '', text: '' });
+    setRefUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('folder', 'celesta-glow/brand-reference');
+      const up = await axios.post(`${API}/admin/upload-image`, fd, { headers: { 'X-Admin-Token': token } });
+      const url = up.data?.url || up.data?.secure_url || '';
+      if (!url) throw new Error('No URL returned');
+      await axios.put(`${API}/admin/site-settings`, { product_image_reference_url: url }, { headers: { 'X-Admin-Token': token } });
+      setRefUrl(url);
+      setRefMsg({ type: 'ok', text: 'Reference bottle saved. New one-click product images will use this design.' });
+    } catch (err) {
+      setRefMsg({ type: 'err', text: err.response?.data?.detail || 'Upload failed. Make sure Cloudinary is configured.' });
+    } finally {
+      setRefUploading(false);
+    }
+  };
+
+  const clearReference = async () => {
+    setRefUploading(true);
+    try {
+      await axios.put(`${API}/admin/site-settings`, { product_image_reference_url: '' }, { headers: { 'X-Admin-Token': token } });
+      setRefUrl('');
+      setRefMsg({ type: 'ok', text: 'Reference removed. Generation falls back to the default approved bottles.' });
+    } catch (err) {
+      setRefMsg({ type: 'err', text: 'Could not clear the reference.' });
+    } finally {
+      setRefUploading(false);
+    }
+  };
 
   const saveCloudinary = async (e) => {
     e.preventDefault();
@@ -177,6 +240,73 @@ export default function AdminSettings() {
               <Save size={14} /> {cdnSaving ? 'Saving…' : 'Save Cloudinary credentials'}
             </button>
           </form>
+        </section>
+
+        {/* Storefront: Other Brands availability */}
+        <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 mb-6" data-testid="other-brands-section">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-9 h-9 rounded-lg bg-stone-900 flex items-center justify-center"><Package size={18} className="text-white" /></div>
+            <div className="flex-1">
+              <h2 className="text-lg font-bold text-gray-900">Other Brands availability</h2>
+              <p className="text-xs text-gray-500">When OFF, non-Celesta-Glow products stay visible but are blocked at checkout.</p>
+            </div>
+          </div>
+          <div className="flex items-center justify-between rounded-xl bg-stone-50 border border-stone-200 px-4 py-3">
+            <div>
+              <p className="text-sm font-bold text-gray-900">
+                {otherBrands === null ? 'Loading…' : otherBrands ? 'In stock — purchasable' : 'Out of stock (blocked at checkout)'}
+              </p>
+              <p className="text-[11px] text-gray-400">Master switch for all other-brand SKUs.</p>
+            </div>
+            <button
+              onClick={toggleOtherBrands}
+              disabled={obSaving || otherBrands === null}
+              className={`relative w-12 h-7 rounded-full transition-colors flex-shrink-0 ${otherBrands ? 'bg-emerald-500' : 'bg-stone-300'} disabled:opacity-60`}
+              data-testid="other-brands-toggle"
+              title={otherBrands ? 'Click to mark OUT of stock' : 'Click to mark IN stock'}
+            >
+              {obSaving ? (
+                <Loader2 size={13} className="absolute inset-0 m-auto text-white animate-spin" />
+              ) : (
+                <span className={`absolute top-0.5 w-6 h-6 rounded-full bg-white shadow transition-transform ${otherBrands ? 'translate-x-5' : 'translate-x-0.5'}`} />
+              )}
+            </button>
+          </div>
+        </section>
+
+        {/* Storefront: Product image reference bottle */}
+        <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 mb-6" data-testid="product-ref-section">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-9 h-9 rounded-lg bg-violet-50 flex items-center justify-center"><ImageIcon size={18} className="text-violet-600" /></div>
+            <div className="flex-1">
+              <h2 className="text-lg font-bold text-gray-900">Product image reference</h2>
+              <p className="text-xs text-gray-500">Upload one clean bottle photo (white backdrop). One-click product images reuse this exact bottle and print each product&apos;s own name on the label.</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className="w-24 h-28 rounded-xl border border-stone-200 bg-stone-50 overflow-hidden flex items-center justify-center shrink-0">
+              {refUrl ? <img src={refUrl} alt="reference bottle" className="w-full h-full object-contain" /> : <ImageIcon size={26} className="text-stone-300" />}
+            </div>
+            <div className="flex-1">
+              <input id="ref-file" type="file" accept="image/*" onChange={uploadReference} className="hidden" />
+              <div className="flex flex-wrap gap-2">
+                <label htmlFor="ref-file" className="inline-flex items-center gap-2 bg-violet-600 text-white text-sm font-bold px-4 py-2.5 rounded-xl hover:bg-violet-700 cursor-pointer" data-testid="ref-upload-btn">
+                  {refUploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {refUrl ? 'Replace reference' : 'Upload reference'}
+                </label>
+                {refUrl && (
+                  <button onClick={clearReference} disabled={refUploading} className="inline-flex items-center gap-2 bg-white border border-stone-200 text-stone-600 text-sm font-bold px-4 py-2.5 rounded-xl hover:bg-stone-50 disabled:opacity-50" data-testid="ref-clear-btn">
+                    Remove
+                  </button>
+                )}
+              </div>
+              {refMsg.text && (
+                <div className={`mt-2 px-3 py-2 rounded-lg text-xs ${refMsg.type === 'ok' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`} data-testid="ref-msg">
+                  {refMsg.text}
+                </div>
+              )}
+            </div>
+          </div>
         </section>
 
         {/* Password */}

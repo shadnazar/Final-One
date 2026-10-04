@@ -804,12 +804,20 @@ export default function TrackerPage() {
     setToken(null); setUser(null);
   }, []);
 
-  // validate token on mount
+  // Validate the saved session on mount. IMPORTANT: only force a logout when
+  // the token is genuinely rejected (401/403). Transient network / 5xx errors
+  // must KEEP the cached session so returning users aren't bounced back to the
+  // OTP screen every visit. The 30-day server session + localStorage token mean
+  // their progress-tracker data (keyed by email) is always waiting for them.
   useEffect(() => {
     if (!token) return;
     axios.get(`${API}/api/auth/me`, authHeader(token)).then((r) => {
       if (r.data?.user) { setUser(r.data.user); try { localStorage.setItem(USER_KEY, JSON.stringify(r.data.user)); } catch {} }
-    }).catch(() => logout());
+    }).catch((e) => {
+      const status = e?.response?.status;
+      if (status === 401 || status === 403) logout();
+      // else: keep the cached session (offline / server hiccup) — do not log out.
+    });
   }, [token, logout]);
 
   const TopBack = () => (

@@ -4,7 +4,6 @@ import Navigation from '../components/Navigation';
 import MobileBottomNav from '../components/MobileBottomNav';
 import Footer from '../components/Footer';
 import WhatsAppButton from '../components/WhatsAppButton';
-import AdminHomeToggle from '../components/AdminHomeToggle';
 import { useTracking } from '../providers/TrackingProvider';
 
 // Lazy load heavy components that aren't immediately visible
@@ -49,10 +48,8 @@ function PublicLayout({ children }) {
       {/* WhatsApp floating button - always visible */}
       <WhatsAppButton phoneNumber="919446125745" />
 
-      {/* Admin-only floating control — Feb 2026. Shows a master switch to
-          flip other_brands_in_stock on/off. Renders NOTHING for non-admin
-          visitors, so no impact on customer UX. */}
-      <AdminHomeToggle />
+      {/* "Other Brands" availability is now controlled from the Admin panel
+          (Admin → Settings), not from a floating homepage control. */}
 
       {/* Discount popup removed (Feb-2026) — replaced by an inline ₹50 flash-timer
           discount message on the Checkout page. See CheckoutPage.js. */}

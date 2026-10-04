@@ -952,11 +952,36 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
         "slug": _slugify(name),
         "key_ingredients": extra_prompt or "",
     }
+    # If the admin has uploaded a reference bottle photo (site settings), use it
+    # as the base bottle and reprint THIS product's name onto its label. This
+    # lets the owner define the exact bottle design once; every generated
+    # product reuses it with the correct label text. No AI image credits spent.
+    ref_url = None
     try:
-        out_bytes = brand_bottles.hero_bytes(product_hint)
-    except Exception as e:
-        logger.error(f"[img-gen] approved-bottle render failed for '{name}': {e}")
-        return None
+        if _db is not None:
+            _ss = await _db.site_settings.find_one({"_id": "main"}, {"_id": 0, "product_image_reference_url": 1}) or {}
+            ref_url = (_ss.get("product_image_reference_url") or "").strip() or None
+    except Exception:
+        ref_url = None
+
+    out_bytes = None
+    if ref_url:
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _hc:
+                _r = await _hc.get(ref_url)
+                _r.raise_for_status()
+                out_bytes = brand_bottles.hero_bytes_from_reference(product_hint, _r.content)
+        except Exception as e:
+            logger.warning(f"[img-gen] reference-bottle render failed, falling back to approved master: {e}")
+            out_bytes = None
+
+    if not out_bytes:
+        try:
+            out_bytes = brand_bottles.hero_bytes(product_hint)
+        except Exception as e:
+            logger.error(f"[img-gen] approved-bottle render failed for '{name}': {e}")
+            return None
 
     try:
         return await durable_images.save_image(
