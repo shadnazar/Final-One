@@ -1,0 +1,54 @@
+# Robots.txt for Celesta Glow
+# https://celestaglow.com
+
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /admin/
+Disallow: /employee
+Disallow: /employee/
+Disallow: /cart
+Disallow: /cart/
+Disallow: /checkout
+Disallow: /checkout/
+Disallow: /order-success/
+Disallow: /track-order
+Disallow: /api/
+
+# Allow well-known crawlers fully (also matches *, but explicit helps debugging)
+User-agent: Googlebot
+Allow: /
+Disallow: /admin/
+Disallow: /employee/
+Disallow: /cart/
+Disallow: /checkout/
+
+User-agent: Bingbot
+Allow: /
+Disallow: /admin/
+Disallow: /employee/
+Disallow: /cart/
+Disallow: /checkout/
+
+User-agent: GPTBot
+Allow: /
+Disallow: /admin/
+Disallow: /employee/
+Disallow: /cart/
+Disallow: /checkout/
+
+User-agent: ClaudeBot
+Allow: /
+Disallow: /admin/
+Disallow: /employee/
+Disallow: /cart/
+Disallow: /checkout/
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+# Dynamic, DB-backed sitemap — auto-updates whenever a new product/blog/category is published.
+Sitemap: https://celestaglow.com/api/sitemap.xml

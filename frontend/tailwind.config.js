@@ -1,7 +1,5 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-    // `overline` is a Tailwind utility; without this an app's own eyebrow-label class draws a line above the text.
-    blocklist: ["overline"],
     darkMode: ["class"],
     content: [
     "./src/**/*.{js,jsx,ts,tsx}",
@@ -56,22 +54,19 @@ module.exports = {
           '5': 'hsl(var(--chart-5))'
         }
       },
+      fontFamily: {
+        body: ['"DM Sans"', 'system-ui', 'sans-serif'],
+        heading: ['Outfit', 'system-ui', 'sans-serif'],
+        sans: ['"DM Sans"', 'system-ui', 'sans-serif']
+      },
       keyframes: {
         'accordion-down': {
-          from: {
-            height: '0'
-          },
-          to: {
-            height: 'var(--radix-accordion-content-height)'
-          }
+          from: { height: '0' },
+          to: { height: 'var(--radix-accordion-content-height)' }
         },
         'accordion-up': {
-          from: {
-            height: 'var(--radix-accordion-content-height)'
-          },
-          to: {
-            height: '0'
-          }
+          from: { height: 'var(--radix-accordion-content-height)' },
+          to: { height: '0' }
         }
       },
       animation: {

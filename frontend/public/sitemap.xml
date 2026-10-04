@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <!-- All canonical URLs (products, niches, blogs, static pages) are emitted
+       by the dynamic, DB-backed backend sitemap. New SKUs/blogs appear there
+       automatically — no redeploy needed. -->
+  <sitemap>
+    <loc>https://celestaglow.com/api/sitemap.xml</loc>
+  </sitemap>
+</sitemapindex>
