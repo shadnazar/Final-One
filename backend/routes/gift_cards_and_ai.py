@@ -1396,6 +1396,45 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
     }
 
 
+@router.post("/admin/products/{slug}/upscale-images")
+async def upscale_product_images(
+    slug: str,
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
+    admin_session: Optional[str] = Header(None, alias="X-Admin-Session"),
+):
+    """One-tap AI upscale: boost the resolution/quality of a product's gallery
+    images (hero + tech sub-images). The lab CERTIFICATE and BEFORE/AFTER images
+    are intentionally left untouched. Uses Cloudinary's upscaling delivery
+    transform (e_upscale + 2048px), so it is instant and spends no AI credits."""
+    _auth(x_admin_token, admin_session)
+    product = await _db.products.find_one({"slug": slug}, {"_id": 0})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    def _upscale_url(u: str) -> str:
+        if not u or "res.cloudinary.com" not in u or "/upload/" not in u:
+            return u
+        # Strip any existing transform segment right after /upload/ then inject ours.
+        pre, post = u.split("/upload/", 1)
+        parts = post.split("/", 1)
+        rest = parts[1] if len(parts) > 1 and (parts[0].startswith("v") and parts[0][1:].isdigit() or "," in parts[0] or parts[0].startswith(("q_", "f_", "w_", "e_", "c_"))) else post
+        tx = "q_auto:best,f_auto,e_upscale,w_2048,c_limit"
+        return f"{pre}/upload/{tx}/{rest}"
+
+    images = [u for u in (product.get("images") or []) if u]
+    new_images = [_upscale_url(u) for u in images]
+    gallery = [{"url": _upscale_url(g.get("url")), "alt": g.get("alt", "")}
+               for g in (product.get("image_gallery") or []) if g.get("url")]
+
+    upd = {"images": new_images, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if gallery:
+        upd["image_gallery"] = gallery
+    await _db.products.update_one({"slug": slug}, {"$set": upd})
+    return {"success": True, "slug": slug, "upscaled": len(new_images), "images": new_images}
+
+
+
+
 
 # ============================================================
 # AI MARKETING IMAGE GENERATOR (Formula-Technology + Before/After)

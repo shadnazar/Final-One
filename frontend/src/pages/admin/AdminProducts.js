@@ -27,6 +27,23 @@ function ImageManager({ images = [], onChange, label = 'Images', single = false,
   //   { mode: 'edit',    src, index }             → re-cropping an existing tile
   const [cropTarget, setCropTarget] = useState(null);
   const [generating, setGenerating] = useState(false);
+  const [upscaling, setUpscaling] = useState(false);
+
+  const handleUpscale = async () => {
+    if (!slug) { alert('Save the product first.'); return; }
+    setUpscaling(true);
+    try {
+      const res = await axios.post(
+        `${API}/admin/products/${slug}/upscale-images`, {}, { headers }
+      );
+      if (res.data?.images) onChange(res.data.images);
+      alert(`Upscaled ${res.data?.upscaled || 0} image(s) to high resolution (certificate & before/after left untouched).`);
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Upscale failed.');
+    } finally {
+      setUpscaling(false);
+    }
+  };
 
   const handleGenerate = async () => {
     if (!slug) { alert('Save the product first (it needs a slug), then upload a hero image before generating.'); return; }
@@ -263,6 +280,17 @@ function ImageManager({ images = [], onChange, label = 'Images', single = false,
           >
             <Sparkles size={12} className={generating ? 'animate-pulse' : ''} />
             {generating ? 'Generating…' : 'Generate Gallery + Certificate'}
+          </button>
+          <button
+            type="button"
+            onClick={handleUpscale}
+            disabled={upscaling}
+            title="One-tap AI upscale of all generated product images (certificate & before/after are left untouched)"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-[11px] font-bold disabled:opacity-50"
+            data-testid="upscale-images-btn"
+          >
+            <Sparkles size={12} className={upscaling ? 'animate-pulse' : ''} />
+            {upscaling ? 'Upscaling…' : 'AI Upscale Images'}
           </button>
           <p className="hidden sm:block text-[10px] text-gray-400">Drag or ▲▼ to reorder · 1st = cover</p>
         </div>

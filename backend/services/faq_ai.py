@@ -44,33 +44,26 @@ async def generate_faqs(product: dict, concern_label: str) -> list:
     actives = [p.strip() for p in re.split(r"[+,]", product.get("key_ingredients") or "") if p.strip()]
     concern_label = concern_label or "skin concerns"
 
-    key = os.environ.get("EMERGENT_LLM_KEY")
-    if key:
-        try:
-            from emergentintegrations.llm.chat import LlmChat, UserMessage
-            prompt = (
-                f"You are a dermatology copywriter for the skincare brand Celesta Glow.\n"
-                f"Write 6 detailed, buyer-focused FAQs for the product '{name}', which specifically "
-                f"targets the concern '{concern_label}'. Key ingredients: {', '.join(actives) or 'clinically-proven actives'}.\n"
-                f"Each answer must be 2–3 sentences, specific to '{concern_label}', factual and reassuring "
-                f"(mention timelines, how the actives work, layering, SPF, and returns where relevant).\n"
-                f"Return ONLY valid JSON: {{\"faqs\":[{{\"q\":\"...\",\"a\":\"...\"}}]}}"
-            )
-            chat = LlmChat(
-                api_key=key,
-                session_id=f"faq-{uuid.uuid4().hex[:8]}",
-                system_message="You write accurate, concise skincare FAQs. Output strict JSON only.",
-            ).with_model("gemini", "gemini-2.5-flash")
-            resp = await chat.send_message(UserMessage(text=prompt))
-            m = re.search(r"\{[\s\S]*\}", resp)
-            if m:
-                data = json.loads(m.group())
-                faqs = data.get("faqs") or []
-                norm = [{"q": f.get("q") or f.get("question"), "a": f.get("a") or f.get("answer")}
-                        for f in faqs if (f.get("q") or f.get("question")) and (f.get("a") or f.get("answer"))]
-                if len(norm) >= 4:
-                    return norm[:8]
-        except Exception as e:
-            logger.warning(f"[faq_ai] Gemini FAQ generation failed, using fallback: {e}")
+    try:
+        from services.llm_helper import llm_text
+        prompt = (
+            f"You are a dermatology copywriter for the skincare brand Celesta Glow.\n"
+            f"Write 6 detailed, buyer-focused FAQs for the product '{name}', which specifically "
+            f"targets the concern '{concern_label}'. Key ingredients: {', '.join(actives) or 'clinically-proven actives'}.\n"
+            f"Each answer must be 2–3 sentences, specific to '{concern_label}', factual and reassuring "
+            f"(mention timelines, how the actives work, layering, SPF, and returns where relevant).\n"
+            f"Return ONLY valid JSON: {{\"faqs\":[{{\"q\":\"...\",\"a\":\"...\"}}]}}"
+        )
+        resp = await llm_text(prompt, system="You write accurate, concise skincare FAQs. Output strict JSON only.")
+        m = re.search(r"\{[\s\S]*\}", resp or "")
+        if m:
+            data = json.loads(m.group())
+            faqs = data.get("faqs") or []
+            norm = [{"q": f.get("q") or f.get("question"), "a": f.get("a") or f.get("answer")}
+                    for f in faqs if (f.get("q") or f.get("question")) and (f.get("a") or f.get("answer"))]
+            if len(norm) >= 4:
+                return norm[:8]
+    except Exception as e:
+        logger.warning(f"[faq_ai] Gemini FAQ generation failed, using fallback: {e}")
 
     return _fallback_faqs(name, concern_label, actives)

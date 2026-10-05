@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import {
   Sparkles, Camera, Loader2, Mail, KeyRound, ArrowLeft, TrendingUp, Package,
   LogOut, Upload, Check, Leaf, Ban, Sun, Moon, ChevronRight, Star, CalendarDays,
-  User, ClipboardList, ShoppingBag, Gift, ArrowRight,
+  User, ClipboardList, ShoppingBag, Gift, ArrowRight, Apple, Droplets,
 } from 'lucide-react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -602,6 +602,29 @@ function ProgressPanel({ token, plan }) {
               );
             })}
           </div>
+
+          {/* Eat / Avoid / Do naturally — personalised per day */}
+          {(day?.eat?.length || day?.avoid?.length || day?.natural?.length) ? (
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="daily-guidance">
+              {[
+                { title: 'What to Eat', items: day?.eat || [], icon: <Apple size={14} />, cls: 'border-emerald-200 bg-emerald-50', dot: 'bg-emerald-500', head: 'text-emerald-800' },
+                { title: 'What to Avoid', items: day?.avoid || [], icon: <Ban size={14} />, cls: 'border-rose-200 bg-rose-50', dot: 'bg-rose-500', head: 'text-rose-800' },
+                { title: 'Do Naturally', items: day?.natural || [], icon: <Droplets size={14} />, cls: 'border-sky-200 bg-sky-50', dot: 'bg-sky-500', head: 'text-sky-800' },
+              ].map((col) => (
+                <div key={col.title} className={`rounded-2xl border p-3.5 ${col.cls}`}>
+                  <p className={`flex items-center gap-1.5 text-[12px] font-black uppercase tracking-wide mb-2 ${col.head}`}>{col.icon} {col.title}</p>
+                  <ul className="space-y-1.5">
+                    {col.items.map((it, i) => (
+                      <li key={i} className="flex items-start gap-2 text-[12px] leading-snug text-stone-700">
+                        <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${col.dot}`} />
+                        <span>{it}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           {/* Share today's photo — unlocks after all steps done */}
           <div className="mt-5 rounded-2xl border border-dashed border-amber-300 bg-amber-50/60 p-4">

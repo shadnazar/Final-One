@@ -776,54 +776,111 @@ class DayCompleteRequest(BaseModel):
     mood: Optional[str] = None
 
 
+def _daily_guidance(day: int, latest: dict) -> dict:
+    """Per-day 'what to eat / avoid / do naturally' guidance for the routine.
+
+    Uses the scan's own lists when present, otherwise curated rotating tips, so
+    every day shows a distinct, useful trio of columns.
+    """
+    scan = latest or {}
+    eat_pool = scan.get("diet") or [
+        "Vitamin-C rich fruits (orange, amla, kiwi) for collagen & glow",
+        "Leafy greens & colourful veggies for antioxidants",
+        "Omega-3 foods (walnuts, flax, fish) to calm inflammation",
+        "Probiotic curd/yogurt for a healthy gut-skin axis",
+        "Nuts & seeds (almonds, pumpkin) for vitamin E repair",
+        "Tomatoes & carrots (lycopene & beta-carotene) for UV defence",
+        "Berries & green tea for anti-ageing polyphenols",
+    ]
+    avoid_pool = scan.get("control") or [
+        "Excess sugar & refined carbs (spikes breakouts)",
+        "Deep-fried & very oily foods",
+        "Too much dairy if you are acne-prone",
+        "Late-night screen time — sleep repairs skin",
+        "Harsh scrubbing / over-exfoliating",
+        "Skipping sunscreen, even indoors",
+        "Excess caffeine & alcohol (dehydrates skin)",
+    ]
+    natural_pool = scan.get("natural_remedies") or [
+        "Drink 8–10 glasses of water through the day",
+        "Get 7–8 hours of restful sleep",
+        "5 minutes of deep breathing / light yoga",
+        "Apply sunscreen every morning (SPF 30+)",
+        "A short brisk walk for circulation & glow",
+        "Gentle facial massage while applying serum",
+        "Eat your last meal 2–3 hours before bed",
+    ]
+
+    def pick(pool, n=3):
+        if not pool:
+            return []
+        start = (day - 1) % len(pool)
+        return [pool[(start + i) % len(pool)] for i in range(min(n, len(pool)))]
+
+    return {
+        "eat": pick(eat_pool),
+        "avoid": pick(avoid_pool),
+        "natural": pick(natural_pool),
+    }
+
+
 @router.get("/tracker/day")
 async def tracker_day(authorization: Optional[str] = Header(None)):
-    """Today's personalised routine checklist derived from the latest scan,
-    plus today's completion state and a 30-day subscription nudge flag."""
+    """The user's CURRENT routine day. The active day advances as soon as the
+    previous day is completed with a selfie (progress-based, not calendar-based),
+    so Day 2, Day 3 … load immediately after each submission."""
     session = await _user(authorization)
     email = session["email"]
     tracker = await db.trackers.find_one({"email": email}, {"_id": 0}) or {}
     latest = await db.skin_scans.find_one({"email": email}, {"_id": 0}, sort=[("created_at", -1)])
 
-    started = _parse_dt(tracker.get("started_at")) or _now()
     now = _now()
-    day_number = max(1, (now - started).days + 1)
     date_key = now.strftime("%Y-%m-%d")
+    total_days = 30
 
-    am = (latest or {}).get("am_routine") or []
-    pm = (latest or {}).get("pm_routine") or []
-    today_doc = await db.tracker_days.find_one({"email": email, "date": date_key}, {"_id": 0}) or {}
-    streak = await db.tracker_days.count_documents({"email": email, "any_done": True})
-    # Photo-verified completed days drive the 30-day progression: each day the
-    # user finishes their routine + shares a selfie unlocks the next day's plan.
+    # Photo-verified completed days drive the 30-day progression.
     completed_days = await db.tracker_days.count_documents(
         {"email": email, "photo_url": {"$exists": True, "$ne": None}}
     )
-    total_days = 30
-    today_done = bool(today_doc.get("photo_url"))
-    progress_day = min(completed_days + (0 if today_done else 1), total_days)
+    plan_complete = completed_days >= total_days
+    active_day = min(completed_days + 1, total_days)
+
+    am = (latest or {}).get("am_routine") or []
+    pm = (latest or {}).get("pm_routine") or []
+    # The active day's working doc (keyed by day_index so a new day starts fresh).
+    day_doc = await db.tracker_days.find_one(
+        {"email": email, "day_index": active_day}, {"_id": 0}
+    ) or {}
+    streak = await db.tracker_days.count_documents({"email": email, "any_done": True})
+    today_done = plan_complete or bool(day_doc.get("photo_url"))
+
+    guidance = _daily_guidance(active_day, latest)
 
     return {
         "success": True,
         "has_scan": bool(latest),
-        "day_number": day_number,
+        "day_number": active_day,
         "date": date_key,
         "completed_days": completed_days,
         "total_days": total_days,
-        "progress_day": max(1, progress_day),
+        "progress_day": active_day,
+        "plan_complete": plan_complete,
         "today_done": today_done,
         "am_routine": am,
         "pm_routine": pm,
+        "eat": guidance["eat"],
+        "avoid": guidance["avoid"],
+        "natural": guidance["natural"],
         "diet": (latest or {}).get("diet", []),
         "control": (latest or {}).get("control", []),
         "natural_remedies": (latest or {}).get("natural_remedies", []),
         "summary": (latest or {}).get("summary"),
         "skin_score": (latest or {}).get("skin_score"),
-        "completed": today_doc.get("completed", {}),
-        "today_photo": today_doc.get("photo_url"),
-        "today_notes": today_doc.get("notes"),
+        "completed": day_doc.get("completed", {}),
+        "today_photo": day_doc.get("photo_url"),
+        "today_notes": day_doc.get("notes"),
         "streak": streak,
-        "subscription_due": day_number > FREE_DAYS,
+        "subscription_due": active_day > FREE_DAYS,
         "free_days": FREE_DAYS,
         "price": TRACKER_PRICE,
     }
@@ -837,9 +894,14 @@ async def tracker_day_complete(req: DayCompleteRequest, authorization: Optional[
     email = session["email"]
     now = _now()
     date_key = now.strftime("%Y-%m-%d")
-    tracker = await db.trackers.find_one({"email": email}, {"_id": 0}) or {}
-    started = _parse_dt(tracker.get("started_at")) or now
-    day_number = max(1, (now - started).days + 1)
+    total_days = 30
+
+    # The day being completed = the current active progress day.
+    completed_before = await db.tracker_days.count_documents(
+        {"email": email, "photo_url": {"$exists": True, "$ne": None}}
+    )
+    active_day = min(completed_before + 1, total_days)
+    day_number = active_day
 
     photo_url = None
     if req.photo_base64:
@@ -856,14 +918,14 @@ async def tracker_day_complete(req: DayCompleteRequest, authorization: Optional[
 
     any_done = any(bool(v) for v in (req.completed or {}).values())
     set_doc = {
-        "email": email, "date": date_key, "day_number": day_number,
+        "email": email, "date": date_key, "day_number": day_number, "day_index": active_day,
         "completed": req.completed or {}, "notes": req.notes, "mood": req.mood,
         "any_done": any_done, "updated_at": _iso(now),
     }
     if photo_url:
         set_doc["photo_url"] = photo_url
     await db.tracker_days.update_one(
-        {"email": email, "date": date_key},
+        {"email": email, "day_index": active_day},
         {"$set": set_doc, "$setOnInsert": {"created_at": _iso(now)}},
         upsert=True,
     )
@@ -883,7 +945,6 @@ async def tracker_day_complete(req: DayCompleteRequest, authorization: Optional[
     completed_days = await db.tracker_days.count_documents(
         {"email": email, "photo_url": {"$exists": True, "$ne": None}}
     )
-    total_days = 30
     return {"success": True, "date": date_key, "day_number": day_number,
             "photo_url": photo_url, "streak": streak,
             "completed_days": completed_days, "total_days": total_days,
