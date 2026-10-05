@@ -944,22 +944,17 @@ def _bottle_kind(name: str, category: str) -> str:
 async def _ai_generate_product_image(name: str, brand: str, category: str,
                                      ref_images: Optional[list] = None,
                                      extra_prompt: str = "",
-                                     size: str = "") -> Optional[str]:
-    """Generate the product's hero image with AI (Gemini Nano Banana) using the
-    brand's reference bottle photo(s) as the visual anchor.
+                                     size: str = "",
+                                     variant: str = "front",
+                                     tag: str = "hero") -> Optional[str]:
+    """Generate a brand-NEW product image with Gemini (Nano Banana), using the
+    reference bottle photo ONLY as a design guide, on a STRICT pure-white
+    background.
 
-    The bottle design is CONSTANT — the owner physically uses these bottles and
-    only swaps the printed label. So the AI is told to keep the bottle shape,
-    cap and finish pixel-faithful to the reference image and regenerate ONLY the
-    label text for THIS product (name + actives + size), on a fresh, varied,
-    photorealistic studio backdrop.
-
-    Reference image priority:
-      1. ``ref_images`` passed by the caller (admin per-product pick).
-      2. Admin-configured site-settings references
-         (product_image_reference_serum_url / product_image_reference_cream_url,
-          or the single product_image_reference_url).
-      3. The two approved default bottles (serum / cream) on Cloudinary.
+    ``variant`` changes the framing so the hero + sub images look like a neat
+    matching set: 'front' (straight-on), 'angle' (three-quarter), 'detail'
+    (closer crop). ``tag`` controls the Cloudinary public_id suffix so each
+    generated image is stored separately.
     """
     api_key = os.environ.get("EMERGENT_LLM_KEY", "")
     if not api_key:
@@ -999,16 +994,13 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
     actives = re.sub(r"\s*\d+(\.\d+)?%", "", actives)  # strip % strengths for a clean label
     size_txt = (size or "").strip()
 
-    # A rotating backdrop style so every one-click generation looks different.
-    import hashlib as _hl
-    styles = [
-        "soft morning light, a smooth stone slab and a few fresh green leaves at the base",
-        "a clean marble surface with delicate clear glass water-droplet orbs and a gentle pastel gradient",
-        "a minimal beige podium, soft shadow, a faint eucalyptus sprig at the edge",
-        "a bright seamless white studio sweep with a subtle silk drape and warm diffused light",
-        "a fresh aqua-toned backdrop with floating clear gel droplets and soft highlights",
-    ]
-    style = styles[int(_hl.md5(product_name.encode()).hexdigest(), 16) % len(styles)]
+    # Framing per variant so the hero + sub images form a neat matching set.
+    framing_map = {
+        "front":  "a straight-on front view with the bottle dead-centre",
+        "angle":  "a subtle three-quarter angle with the bottle centred",
+        "detail": "a slightly closer, straight-on crop focusing on the bottle body and pump",
+    }
+    framing = framing_map.get(variant, framing_map["front"])
 
     label_lines = [
         f"Brand (small caps, top of label): {brand_name.upper()}",
@@ -1021,7 +1013,7 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
         label_lines.append(f"Size (small, bottom): {size_txt}")
     label_block = "\n".join("  - " + ln for ln in label_lines)
 
-    # Download the reference bottle (bytes → base64 image input for the AI).
+    # Download the reference bottle (bytes → image input for the AI).
     try:
         import httpx as _httpx
         async with _httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _hc:
@@ -1031,26 +1023,22 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
     except Exception as e:
         logger.error(f"[img-gen] could not download reference bottle ({ref_url}): {e}")
         return None
-    ref_b64 = base64.b64encode(ref_bytes).decode("utf-8")
 
     prompt = (
-        "Recreate the attached reference product photo as a brand-new, high-end skincare "
-        "advertisement image.\n"
-        "BOTTLE: Keep the EXACT same bottle from the reference — identical shape, clear pump cap, "
+        "Generate a completely NEW, original, photorealistic product photograph. Use the attached "
+        "reference image ONLY as a guide for the bottle's design.\n"
+        f"FRAMING: {framing}.\n"
+        "BOTTLE: Reproduce the EXACT same bottle as the reference — identical shape, clear pump cap, "
         "finish and proportions. Do NOT invent a different bottle.\n"
-        "FRAMING (critical): place the bottle DEAD-CENTRE in the frame with even space on the left and "
-        "right. The bottle must be the single central subject.\n"
-        "LABEL: The bottle's existing printed text is only a placeholder. COMPLETELY REPLACE it with "
-        "a single clean, minimal, premium label that reads ONLY the text below — first erase every "
-        "trace of the old wording, then print the new wording (never overlap old and new text):\n"
+        "LABEL: Print a fresh, clean, minimal premium label on the bottle showing ONLY the text below. "
+        "Centre it on the bottle's front face with clear margins on both sides; use a clean sans-serif "
+        "typeface at a modest size so EVERY word is fully visible and correctly spelled with nothing "
+        "cropped at the edges:\n"
         f"{label_block}\n"
-        "TYPE & PLACEMENT (very important): use a clean sans-serif typeface and CENTRE the whole label "
-        "block on the bottle's front face with comfortable margins on BOTH the left and right sides of "
-        "the bottle. Keep the font modest so EVERY word is fully visible — the product name, actives, "
-        "footer and size must all fit completely inside the bottle's front label area, with NOTHING "
-        "cropped at the edges, perfectly legible and correctly spelled.\n"
-        f"SCENE: Place the bottle on a fresh photorealistic studio backdrop — {style} — bright and "
-        "airy, high resolution, editorial quality. No watermark, no extra words, no other products."
+        "BACKGROUND: a STRICT, uniform, PURE-WHITE background (#FFFFFF) edge-to-edge — no props, no "
+        "gradients, no colours, no scenery; only a very soft, subtle contact shadow beneath the bottle. "
+        "Bright, clean, high-resolution, e-commerce catalogue quality. No watermark, no extra text, "
+        "no other objects."
     )
 
     # STRICT: image generation uses ONLY the direct GEMINI API KEY (Google GenAI
@@ -1090,7 +1078,7 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
         from services import durable_images
         return await durable_images.save_image(
             _db, out_bytes,
-            slug=_slugify(name), tag="hero",
+            slug=_slugify(name), tag=tag,
             folder="celesta-glow/generated",
         )
     except Exception as e:
@@ -1259,19 +1247,36 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
         return u
 
     image_url = body.image_url
+    ai_images = []
     if not image_url and body.generate_image:
         # Clean actives only (comma-separated) for the label — no prose sentence.
         _img_ings = content.get("key_ingredients", "") or (body.key_ingredients or "")
         _img_size = content.get("size", "") or (body.size_hint or "")
+        _refs = [body.reference_image_url] if body.reference_image_url else None
         try:
-            _refs = [body.reference_image_url] if body.reference_image_url else None
             image_url = await _ai_generate_product_image(
                 name, brand, category_slug or subcategory_slug,
-                ref_images=_refs, extra_prompt=_img_ings, size=_img_size)
+                ref_images=_refs, extra_prompt=_img_ings, size=_img_size,
+                variant="front", tag="hero")
         except Exception as e:
-            logger.warning(f"[one-click] image generation failed (non-fatal): {e}")
+            logger.warning(f"[one-click] hero image generation failed (non-fatal): {e}")
             image_url = None
+        # Sub images — same reference bottle, neat pure-white background, slightly
+        # different framing so the product gallery is a clean matching set.
+        for _variant in ("angle", "detail"):
+            try:
+                _sub = await _ai_generate_product_image(
+                    name, brand, category_slug or subcategory_slug,
+                    ref_images=_refs, extra_prompt=_img_ings, size=_img_size,
+                    variant=_variant, tag=f"sub-{_variant}")
+                if _sub:
+                    ai_images.append(_sub)
+            except Exception as e:
+                logger.warning(f"[one-click] sub-image '{_variant}' failed (non-fatal): {e}")
     image_url = _cld_hq(image_url)
+    ai_images = [_cld_hq(u) for u in ai_images]
+    # Final ordered image set: AI hero first, then the AI sub images.
+    final_images = [u for u in [image_url] + ai_images if u]
 
     # ---------- 4. CREATE PRODUCT ----------
     base_slug = _slugify(name)
@@ -1297,8 +1302,8 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
         "benefits": content.get("benefits", []) if isinstance(content.get("benefits"), list) else [],
         "how_to_use": content.get("how_to_use", ""),
         "size": content.get("size", ""),
-        "images": [image_url] if image_url else [],
-        "image_gallery": [{"url": image_url, "alt": f"{name} — {brand}"}] if image_url else [],
+        "images": final_images,
+        "image_gallery": [{"url": u, "alt": f"{name} — {brand}"} for u in final_images],
         "mrp": float(mrp),
         "prepaid_price": float(offer),
         "cod_price": float(offer),
@@ -1324,19 +1329,21 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
     }
     await _db.products.insert_one(product)
 
-    # ---------- 4b. STRUCTURED MEDIA (gallery + certificate + before/after) ----------
-    # Every one-click product automatically gets the Formula-Technology gallery,
-    # a lab certificate and a BEFORE/AFTER pair — drawn with Pillow so it works
-    # even when no product photo was provided (a clean placeholder bottle is used).
+    # ---------- 4b. STRUCTURED MEDIA (certificate + before/after) ----------
+    # We do NOT run the Pillow gallery here — the product photos are the
+    # Gemini-generated hero + sub images. We still attach a lab certificate and a
+    # BEFORE/AFTER pair (Pillow). After that we re-assert the AI image set so the
+    # Pillow hero can never override the Gemini images.
     try:
         from services.gallery_composer import generate_and_persist
         media = await generate_and_persist(
             _db,
             {**product, "solves": ", ".join(concern_list) or "your skin concern"},
-            do_gallery=True, do_certificate=True, do_before_after=True,
+            do_gallery=False, do_certificate=True, do_before_after=True,
         )
         b_img = media.pop("before_after_before", None)
         a_img = media.pop("before_after_after", None)
+        media.pop("images", None)  # never let the Pillow hero override the AI images
         if media:
             await _db.products.update_one({"slug": slug}, {"$set": {**media, "updated_at": now_iso}})
             product.update(media)
@@ -1354,6 +1361,16 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
             )
     except Exception as e:
         logger.warning(f"[one-click] structured media generation failed for {slug}: {e}")
+
+    # Re-assert the Gemini image set (hero + subs) as the source of truth.
+    if final_images:
+        ai_gallery = [{"url": u, "alt": f"{name} — {brand}"} for u in final_images]
+        await _db.products.update_one(
+            {"slug": slug},
+            {"$set": {"images": final_images, "image_gallery": ai_gallery, "updated_at": now_iso}},
+        )
+        product["images"] = final_images
+        product["image_gallery"] = ai_gallery
 
     # Fire-and-forget AI reviews
     try:
