@@ -994,50 +994,56 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
     out_bytes = None
     mime = "image/png"
 
-    # 1) Gemini Nano Banana via Emergent LLM key (image-out modality)
-    emergent_key = os.environ.get("EMERGENT_LLM_KEY")
-    if emergent_key:
+    # 1) Direct Google Gemini (GEMINI_API_KEY) — this works from the deployed app.
+    gkey = os.environ.get("GEMINI_API_KEY")
+    if gkey:
         try:
-            from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
-            file_contents = []
+            import asyncio as _asyncio
+            from google import genai
+            from google.genai import types as _gt
+            client = genai.Client(api_key=gkey)
+            parts = [prompt]
             for rb in (ref_images or []):
-                try:
-                    file_contents.append(ImageContent(_b64.b64encode(rb).decode("utf-8")))
-                except Exception:
-                    pass
-            chat = LlmChat(
-                api_key=emergent_key, session_id=f"prodimg-{uuid.uuid4().hex[:8]}",
-                system_message="You are a skincare-brand visual designer that produces photorealistic, premium product images on a clean white background.",
-            )
-            chat.with_model("gemini", "gemini-3.1-flash-image-preview").with_params(modalities=["image", "text"])
-            msg = UserMessage(text=prompt, file_contents=file_contents or None)
-            _text, images = await chat.send_message_multimodal_response(msg)
-            if images:
-                out_bytes = _b64.b64decode(images[0]["data"])
-                mime = images[0].get("mime_type", "image/png")
-        except Exception as e:
-            logger.warning(f"[img-gen] Gemini(Emergent) image failed: {e}")
+                parts.append(_gt.Part.from_bytes(data=rb, mime_type="image/png"))
 
-    # 2) Direct Google Gemini (GEMINI_API_KEY)
+            def _imggen():
+                return client.models.generate_content(model="gemini-2.5-flash-image", contents=parts)
+
+            resp = await _asyncio.to_thread(_imggen)
+            for part in (resp.candidates[0].content.parts if resp.candidates else []):
+                inline = getattr(part, "inline_data", None)
+                if inline and getattr(inline, "data", None):
+                    out_bytes = inline.data
+                    mime = inline.mime_type or "image/png"
+                    break
+        except Exception as e:
+            logger.warning(f"[img-gen] Gemini(direct) image failed: {e}")
+
+    # 2) Gemini Nano Banana via Emergent LLM key (image-out modality) — fallback
+    #    (works locally; blocked externally on the free plan).
     if not out_bytes:
-        gkey = os.environ.get("GEMINI_API_KEY")
-        if gkey:
+        emergent_key = os.environ.get("EMERGENT_LLM_KEY")
+        if emergent_key:
             try:
-                from google import genai
-                from google.genai import types as _gt
-                client = genai.Client(api_key=gkey)
-                parts = [prompt]
+                from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+                file_contents = []
                 for rb in (ref_images or []):
-                    parts.append(_gt.Part.from_bytes(data=rb, mime_type="image/png"))
-                resp = client.models.generate_content(model="gemini-2.5-flash-image", contents=parts)
-                for part in (resp.candidates[0].content.parts if resp.candidates else []):
-                    inline = getattr(part, "inline_data", None)
-                    if inline and getattr(inline, "data", None):
-                        out_bytes = inline.data
-                        mime = inline.mime_type or "image/png"
-                        break
+                    try:
+                        file_contents.append(ImageContent(_b64.b64encode(rb).decode("utf-8")))
+                    except Exception:
+                        pass
+                chat = LlmChat(
+                    api_key=emergent_key, session_id=f"prodimg-{uuid.uuid4().hex[:8]}",
+                    system_message="You are a skincare-brand visual designer that produces photorealistic, premium product images on a clean white background.",
+                )
+                chat.with_model("gemini", "gemini-2.5-flash-image").with_params(modalities=["image", "text"])
+                msg = UserMessage(text=prompt, file_contents=file_contents or None)
+                _text, images = await chat.send_message_multimodal_response(msg)
+                if images:
+                    out_bytes = _b64.b64decode(images[0]["data"])
+                    mime = images[0].get("mime_type", "image/png")
             except Exception as e:
-                logger.warning(f"[img-gen] Gemini(direct) image failed: {e}")
+                logger.warning(f"[img-gen] Gemini(Emergent) image failed: {e}")
 
     # 3) Pollinations (free, text-only) as final fallback
     if not out_bytes:
@@ -1048,7 +1054,7 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
                 f"https://image.pollinations.ai/prompt/{_q(prompt)}"
                 f"?width=1024&height=1024&model=flux&nologo=true&enhance=true&seed={uuid.uuid4().int % 10_000_000}"
             )
-            async with _httpx.AsyncClient(timeout=90.0, follow_redirects=True) as hc:
+            async with _httpx.AsyncClient(timeout=45.0, follow_redirects=True) as hc:
                 r = await hc.get(url)
                 if r.status_code == 200 and r.content and len(r.content) > 1024:
                     out_bytes = r.content
@@ -1060,16 +1066,22 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
         return None
 
     # Always maintain a HIGH-RESOLUTION image: upscale to >= 2048px if smaller.
-    try:
+    # Done in a worker thread so the CPU-heavy PIL work never starves the event
+    # loop / health probe on the single production worker.
+    def _hires(bts):
         from PIL import Image as _Img
         import io as _io
-        _im = _Img.open(_io.BytesIO(out_bytes)).convert("RGB")
+        _im = _Img.open(_io.BytesIO(bts)).convert("RGB")
         if max(_im.size) < 2048:
             _scale = 2048 / max(_im.size)
             _im = _im.resize((int(_im.width * _scale), int(_im.height * _scale)), _Img.LANCZOS)
         _buf = _io.BytesIO()
         _im.save(_buf, "JPEG", quality=95, subsampling=0, optimize=True, progressive=True)
-        out_bytes = _buf.getvalue()
+        return _buf.getvalue()
+
+    try:
+        import asyncio as _asyncio
+        out_bytes = await _asyncio.to_thread(_hires, out_bytes)
         mime = "image/jpeg"
     except Exception as e:
         logger.warning(f"[img-gen] high-res upscale skipped: {e}")
@@ -1212,17 +1224,19 @@ Generate 5-6 helpful FAQs covering: which skin type it suits, how long until vis
 Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure"."""
     content = {}
     try:
-        chat = LlmChat(
-            api_key=api_key, session_id=f"oneclick-{uuid.uuid4().hex[:8]}",
-            system_message="You are a precise JSON-only copywriting API for a skincare brand.",
-        ).with_model("gemini", "gemini-2.5-flash")
-        resp = await chat.send_message(UserMessage(text=prompt))
+        from services.llm_helper import llm_text
+        resp = await llm_text(prompt, system="You are a precise JSON-only copywriting API for a skincare brand.")
         raw = re.sub(r"^```(?:json)?\s*", "", (resp or "").strip())
         raw = re.sub(r"\s*```$", "", raw)
         m = re.search(r"\{[\s\S]*\}", raw)
         content = json.loads(m.group(0) if m else raw)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"AI content generation failed: {str(e)[:160]}")
+        raise HTTPException(
+            status_code=503,
+            detail=("AI content generation is temporarily unavailable. If you are on the deployed site, "
+                    "ensure GEMINI_API_KEY is added as a deployment secret (or the plan allows the universal key). "
+                    f"Detail: {str(e)[:140]}"),
+        )
 
     def _to_int(v):
         try:

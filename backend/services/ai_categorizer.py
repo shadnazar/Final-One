@@ -156,17 +156,13 @@ class DBAwareCategorizer:
             return fallback
         try:
             prompt = self._build_prompt(prod)
-            chat = LlmChat(
-                api_key=self.api_key,
-                session_id=f"audit-{uuid.uuid4().hex[:8]}",
-                system_message=(
-                    "You are an expert Indian D2C beauty merchandiser organising a "
-                    "shopfront. You return STRICT JSON only. Always prefer matching "
-                    "an EXISTING slug over inventing a new one — only propose a new "
-                    "slug when nothing in the list reasonably fits the product."
-                ),
-            ).with_model("gemini", "gemini-2.5-flash")
-            resp = await chat.send_message(UserMessage(text=prompt))
+            from services.llm_helper import llm_text
+            resp = await llm_text(prompt, system=(
+                "You are an expert Indian D2C beauty merchandiser organising a "
+                "shopfront. You return STRICT JSON only. Always prefer matching "
+                "an EXISTING slug over inventing a new one — only propose a new "
+                "slug when nothing in the list reasonably fits the product."
+            ))
             match = re.search(r"\{[\s\S]*\}", resp or "")
             if not match:
                 raise ValueError("No JSON in LLM response")
