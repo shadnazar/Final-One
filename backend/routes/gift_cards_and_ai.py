@@ -946,7 +946,8 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
                                      extra_prompt: str = "",
                                      size: str = "",
                                      variant: str = "front",
-                                     tag: str = "hero") -> Optional[str]:
+                                     tag: str = "hero",
+                                     benefits: Optional[list] = None) -> Optional[str]:
     """Generate a brand-NEW product image with Gemini (Nano Banana), using the
     reference bottle photo ONLY as a design guide, on a STRICT pure-white
     background.
@@ -986,32 +987,35 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
     if not ref_url:
         ref_url = _DEFAULT_REF_BOTTLES.get(kind) or _DEFAULT_REF_BOTTLES["serum"]
 
-    # Build the exact label copy the AI must print. extra_prompt here is the
-    # CLEAN comma-separated actives (no prose sentence).
+    # Keep it SIMPLE: hand Gemini the reference bottle + product name + a few
+    # ingredients to highlight, and let the AI handle the label layout, style and
+    # background exactly like the reference. No micro-managing the layout.
     product_name = (name or "Advanced Formula").strip()
     brand_name = (brand or "Celesta Glow").strip()
     actives = re.sub(r"\s+", " ", (extra_prompt or "")).strip()
-    actives = re.sub(r"\s*\d+(\.\d+)?%", "", actives)  # strip % strengths for a clean label
+    actives = re.sub(r"\s*\d+(\.\d+)?%", "", actives)  # drop % strengths
+    # keep only the first few ingredients to highlight
+    highlight = ", ".join([a.strip() for a in actives.split(",") if a.strip()][:3])
     size_txt = (size or "").strip()
 
-    # Framing per variant so the hero + sub images form a neat matching set.
-    framing_map = {
-        "front":  "a straight-on front view with the bottle dead-centre",
-        "angle":  "a subtle three-quarter angle with the bottle centred",
-        "detail": "a slightly closer, straight-on crop focusing on the bottle body and pump",
+    # Hero = front view; sub images = a different angle / closer crop.
+    view_map = {
+        "front":  "a clean straight-on front view",
+        "angle":  "a slightly different three-quarter angle",
+        "detail": "a closer crop of the bottle",
     }
-    framing = framing_map.get(variant, framing_map["front"])
+    view = view_map.get(variant, view_map["front"])
 
-    label_lines = [
-        f"Brand (small caps, top of label): {brand_name.upper()}",
-        f"Product name (largest, bold, centred): {product_name.upper()}",
-    ]
-    if actives:
-        label_lines.append(f"Key actives (small caps, centred): {actives.upper()}")
-    label_lines.append("Footer (small): FOR ALL SKIN TYPES")
-    if size_txt:
-        label_lines.append(f"Size (small, bottom): {size_txt}")
-    label_block = "\n".join("  - " + ln for ln in label_lines)
+    prompt = (
+        f"This is our reference product bottle. Create a new, photorealistic e-commerce product "
+        f"photo of the SAME bottle for a {brand_name} product called \"{product_name}\". "
+        f"Keep the exact same bottle shape, label layout, typography style, colours and the soft "
+        f"studio background style as the reference image — only change the product name on the label "
+        f"to \"{product_name}\""
+        + (f" and show these key ingredients highlighted on the label: {highlight}." if highlight else ".")
+        + f" Show {view} with the bottle centred and fully visible (nothing cut off). "
+        f"High quality, premium, clean and neat — just like the reference."
+    )
 
     # Download the reference bottle (bytes → image input for the AI).
     try:
@@ -1023,23 +1027,6 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
     except Exception as e:
         logger.error(f"[img-gen] could not download reference bottle ({ref_url}): {e}")
         return None
-
-    prompt = (
-        "Generate a completely NEW, original, photorealistic product photograph. Use the attached "
-        "reference image ONLY as a guide for the bottle's design.\n"
-        f"FRAMING: {framing}.\n"
-        "BOTTLE: Reproduce the EXACT same bottle as the reference — identical shape, clear pump cap, "
-        "finish and proportions. Do NOT invent a different bottle.\n"
-        "LABEL: Print a fresh, clean, minimal premium label on the bottle showing ONLY the text below. "
-        "Centre it on the bottle's front face with clear margins on both sides; use a clean sans-serif "
-        "typeface at a modest size so EVERY word is fully visible and correctly spelled with nothing "
-        "cropped at the edges:\n"
-        f"{label_block}\n"
-        "BACKGROUND: a STRICT, uniform, PURE-WHITE background (#FFFFFF) edge-to-edge — no props, no "
-        "gradients, no colours, no scenery; only a very soft, subtle contact shadow beneath the bottle. "
-        "Bright, clean, high-resolution, e-commerce catalogue quality. No watermark, no extra text, "
-        "no other objects."
-    )
 
     # STRICT: image generation uses ONLY the direct GEMINI API KEY (Google GenAI
     # SDK, model gemini-2.5-flash-image = "Nano Banana"), with the reference
@@ -1252,23 +1239,24 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
         # Clean actives only (comma-separated) for the label — no prose sentence.
         _img_ings = content.get("key_ingredients", "") or (body.key_ingredients or "")
         _img_size = content.get("size", "") or (body.size_hint or "")
+        _img_benefits = content.get("benefits") or []
         _refs = [body.reference_image_url] if body.reference_image_url else None
         try:
             image_url = await _ai_generate_product_image(
                 name, brand, category_slug or subcategory_slug,
                 ref_images=_refs, extra_prompt=_img_ings, size=_img_size,
-                variant="front", tag="hero")
+                variant="front", tag="hero", benefits=_img_benefits)
         except Exception as e:
             logger.warning(f"[one-click] hero image generation failed (non-fatal): {e}")
             image_url = None
-        # Sub images — same reference bottle, neat pure-white background, slightly
+        # Sub images — same reference bottle, neat matching style, slightly
         # different framing so the product gallery is a clean matching set.
         for _variant in ("angle", "detail"):
             try:
                 _sub = await _ai_generate_product_image(
                     name, brand, category_slug or subcategory_slug,
                     ref_images=_refs, extra_prompt=_img_ings, size=_img_size,
-                    variant=_variant, tag=f"sub-{_variant}")
+                    variant=_variant, tag=f"sub-{_variant}", benefits=_img_benefits)
                 if _sub:
                     ai_images.append(_sub)
             except Exception as e:

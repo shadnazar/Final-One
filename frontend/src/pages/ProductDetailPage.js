@@ -765,7 +765,7 @@ function ProductDetailPage() {
                   <TabsTrigger value="gallery" className="text-xs sm:text-sm py-2 data-[state=active]:bg-white data-[state=active]:text-emerald-700 rounded-lg" data-testid="tab-gallery">Gallery</TabsTrigger>
                   <TabsTrigger value="certificates" className="text-xs sm:text-sm py-2 data-[state=active]:bg-white data-[state=active]:text-emerald-700 rounded-lg" data-testid="tab-certificates">Certificates</TabsTrigger>
                   <TabsTrigger value="before-after" className="text-xs sm:text-sm py-2 data-[state=active]:bg-white data-[state=active]:text-emerald-700 rounded-lg" data-testid="tab-before-after">Before &amp; After</TabsTrigger>
-                  <TabsTrigger value="how" className="text-xs sm:text-sm py-2 data-[state=active]:bg-white data-[state=active]:text-emerald-700 rounded-lg" data-testid="tab-how">How It Works</TabsTrigger>
+                  <TabsTrigger value="how" className="text-xs sm:text-sm py-2 data-[state=active]:bg-white data-[state=active]:text-emerald-700 rounded-lg" data-testid="tab-how">How to Use</TabsTrigger>
                 </TabsList>
 
                 {/* Gallery */}
@@ -816,7 +816,7 @@ function ProductDetailPage() {
                   ) : <p className="text-sm text-stone-400 text-center py-10">Coming soon</p>}
                 </TabsContent>
 
-                {/* How It Works */}
+                {/* How to Use */}
                 <TabsContent value="how" className="mt-5" data-testid="tabpanel-how">
                   {hiwSteps.length ? (
                     <ol className="space-y-3">
