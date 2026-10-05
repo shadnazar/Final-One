@@ -1343,7 +1343,17 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
         )
         b_img = media.pop("before_after_before", None)
         a_img = media.pop("before_after_after", None)
-        media.pop("images", None)  # keep the AI hero image as the main product photo
+        # Merge images: keep the AI-generated hero as the MAIN image, then append
+        # the gallery sub-images (tech cards). The gallery's own first image is a
+        # Pillow bottle hero — drop it in favour of the AI hero when we have one.
+        gallery_imgs = [u for u in (media.get("images") or []) if u]
+        if image_url and gallery_imgs:
+            media["images"] = [image_url] + gallery_imgs[1:]
+        elif image_url:
+            media["images"] = [image_url]
+        # else: keep the gallery images as-is
+        if media.get("images"):
+            media["image_gallery"] = [{"url": u, "alt": f"{name} — {brand}"} for u in media["images"]]
         if media:
             await _db.products.update_one({"slug": slug}, {"$set": {**media, "updated_at": now_iso}})
             product.update(media)

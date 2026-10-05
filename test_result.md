@@ -115,6 +115,9 @@
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED - POST /api/admin/products/anti-aging-serum/generate-images successfully generates gallery + certificate with NO 'cannot open resource' font errors. Response includes: (1) 5 images (hero 2048x2048 + 4 tech gallery cards 1200x1200), (2) test_report_image (certificate), (3) before_after array with 2 images. All images verified: HTTP 200, valid dimensions, non-trivial size (57-68 KB). Regression check passed: gallery=false, certificate=true also works. Font fix verified: bundled fonts in /app/backend/fonts/ with fallback loader working correctly. No LLM credits used (Pillow-only)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ RE-VERIFIED - Font fix confirmed working correctly. POST /api/admin/products/anti-aging-serum/generate-images with {gallery:true, certificate:true} returns HTTP 200 with NO 'cannot open resource' font errors. Response includes: (1) 5 gallery images, (2) test_report_image (certificate), (3) 2 before_after images. Regression check passed: {gallery:false, certificate:true} also returns HTTP 200 with no font errors. Bundled fonts in /app/backend/fonts/ with fallback loader working correctly. Pillow-only, no LLM credits used."
 
 user_problem_statement: "Clone of Celesta Glow skincare e-commerce (ported from GitHub repo). Verify core storefront + integration-backed backend flows work after porting into /app and configuring live API keys (Razorpay, Cloudinary, Delhivery, SMTP, Meta CAPI, Gemini/Emergent LLM, Google Maps)."
 
@@ -229,6 +232,9 @@ test_plan:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED - POST /api/admin/ai/one-click-product successfully generates high-resolution product images. Tested with 'Celesta Glow Vitamin C Brightening Serum'. Response includes valid image_url. Image verified at 2048x2048px (target resolution achieved, up from old 1400px). Product created with slug 'celesta-glow-vitamin-c-brightening-serum'. Image URL: https://res.cloudinary.com/dcvuqcqjn/image/upload/q_auto:best,f_auto/v1791154226/celesta-glow/generated/celesta-glow-vitamin-c-brightening-serum-hero.jpg. The bottle relabeling feature (services/brand_bottles.py hero_bytes with relabelled=True) is working correctly."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ FULL MEDIA SET VERIFIED - POST /api/admin/ai/one-click-product with 'Celesta Glow Peptide Repair Serum' returns COMPLETE media set in ONE call: (a) images: 5 total (1 hero 2048x2048 + 4 gallery tech images 1200x1200), (b) test_report_image: certificate URL present, (c) before_after: 2 items (before + after images), (d) how_to_use: 272 characters of text. Hero image verified: 2048x2048, 131.5 KB. Tech1 image verified: 1200x1200, 71.8 KB. All images load correctly (HTTP 200, valid dimensions, non-trivial size). One-click product now generates the FULL media set as required."
   - task: "Tracker daily loop — day/complete advances 30-day plan"
     implemented: true
     working: true
@@ -261,7 +267,7 @@ test_plan:
 
 agent_communication:
     -agent: "main"
-    -message: "New round: (1) moved Other Brands toggle off the homepage into Admin→Settings; (2) added admin-configurable product_image_reference_url used as the base bottle for one-click image gen (reference render verified locally at 2048px); (3) made customer OTP session resilient (only logout on 401/403). Please run ONLY a no-credit backend test: the site-settings round-trip task above (PUT then GET). Do NOT call any LLM/image-gen endpoint this round to conserve credits. Admin password celestaglow2024."
+    -message: "Two fixes to verify (both Pillow-only, MINIMAL/ONE LLM call allowed for the one-click check): (1) One-click product (POST /api/admin/ai/one-click-product, X-Admin-Token: celestaglow2024, body {name, generate_image:true}) must now return a FULL set: product.images has the AI hero PLUS 4 gallery sub-images (tech1-4), product.test_report_image (certificate), product.before_after (2 items), and product.how_to_use text. Make only ONE such call to conserve credits. (2) The 24-variation generator and the Generate Gallery+Certificate both previously failed with 'cannot open resource' (missing PIL fonts) — fonts are now bundled in backend/fonts/ with a fallback loader; verify POST /api/admin/products/{slug}/generate-images {gallery:true,certificate:true} returns 200 with images+certificate and NO font error. Do NOT run the full 24-variation endpoint (heavy/credits) — the shared font path is the same and is covered by test #2. Admin password celestaglow2024."
     -agent: "testing"
     -message: "✅ ALL BACKEND TESTS PASSED (6/6). Tested: Products catalog (list + detail), Razorpay order creation (LIVE keys), COD order creation with valid pincode, Consultation/Lead submit, and AI Skin Analyzer. All endpoints respond correctly with valid data. No critical issues found. Backend is production-ready."
     -agent: "testing"
@@ -270,4 +276,6 @@ agent_communication:
     -message: "✅ SITE SETTINGS ROUND-TRIP TEST PASSED. Tested PUT /api/admin/site-settings and GET /api/site-settings with both other_brands_in_stock and product_image_reference_url fields. All 4 test steps passed: (1) PUT with values, (2) GET verified persistence, (3) PUT with cleared values, (4) GET verified updates. No LLM credits used. Backend API working correctly."
     -agent: "testing"
     -message: "✅ FONT FIX VERIFIED. Admin 'Generate Gallery + Certificate' endpoint (POST /api/admin/products/{slug}/generate-images) now works correctly with NO 'cannot open resource' font errors. Tested with product 'anti-aging-serum': (1) Gallery generation: 5 images (hero 2048x2048 + 4 tech cards 1200x1200), (2) Certificate generation: test_report_image created, (3) Before/after images: 2 images generated. All images verified: HTTP 200, valid dimensions, non-trivial size. Regression check passed (gallery=false, certificate=true). Font fix working: bundled fonts in /app/backend/fonts/ with fallback loader (bundled → system → load_default). No LLM credits used (Pillow-only). Bug fix is production-ready."
+    -agent: "testing"
+    -message: "✅ BOTH BUG FIXES RE-VERIFIED (2/2). FIX 1 - One-click product FULL media set: POST /api/admin/ai/one-click-product with 'Celesta Glow Peptide Repair Serum' returns COMPLETE media set in ONE call: (a) 5 images (1 hero 2048x2048 + 4 gallery tech 1200x1200), (b) test_report_image certificate, (c) 2 before_after items, (d) how_to_use text (272 chars). Hero verified: 2048x2048, 131.5 KB. Tech1 verified: 1200x1200, 71.8 KB. All images load correctly. FIX 2 - Font fix: POST /api/admin/products/anti-aging-serum/generate-images with {gallery:true, certificate:true} returns HTTP 200 with NO 'cannot open resource' errors. 5 gallery images + certificate + 2 before_after generated. Regression check passed. Both fixes production-ready. Only ONE LLM call made (conserved credits)."
 
