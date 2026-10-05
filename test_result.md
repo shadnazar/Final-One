@@ -101,6 +101,20 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+  - task: "Admin Generate Gallery + Certificate endpoint (font fix)"
+    implemented: true
+    working: true
+    file: "routes/products.py / services/gallery_composer.py / services/brand_bottles.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "BUGFIX: 'Generate Gallery + Certificate' returned 'Image generation failed: cannot open resource' on the deployed app because PIL fonts were loaded from /usr/share/fonts (absent in prod container). Fonts are now BUNDLED in backend/fonts/ with a fallback loader (bundled -> system -> load_default). Verify POST /api/admin/products/{slug}/generate-images with body {gallery:true, certificate:true} and header X-Admin-Token: celestaglow2024 returns 200 with images + test_report_image for an existing product slug (e.g. anti-aging-serum). This is Pillow-only — no LLM credits are spent."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED - POST /api/admin/products/anti-aging-serum/generate-images successfully generates gallery + certificate with NO 'cannot open resource' font errors. Response includes: (1) 5 images (hero 2048x2048 + 4 tech gallery cards 1200x1200), (2) test_report_image (certificate), (3) before_after array with 2 images. All images verified: HTTP 200, valid dimensions, non-trivial size (57-68 KB). Regression check passed: gallery=false, certificate=true also works. Font fix verified: bundled fonts in /app/backend/fonts/ with fallback loader working correctly. No LLM credits used (Pillow-only)."
 
 user_problem_statement: "Clone of Celesta Glow skincare e-commerce (ported from GitHub repo). Verify core storefront + integration-backed backend flows work after porting into /app and configuring live API keys (Razorpay, Cloudinary, Delhivery, SMTP, Meta CAPI, Gemini/Emergent LLM, Google Maps)."
 
@@ -254,3 +268,6 @@ agent_communication:
     -message: "✅ BOTH BUG FIXES VERIFIED (2/2). FIX 1: One-click product image generation now renders at 2048x2048px (verified with actual image fetch) and successfully creates products with high-res hero images. FIX 2: Tracker daily loop endpoints (/tracker/day and /tracker/day/complete) return all required fields (completed_days, total_days=30, progress_day, today_done, plan_complete) and correctly advance the 30-day plan when a photo is submitted. Both fixes are production-ready."
     -agent: "testing"
     -message: "✅ SITE SETTINGS ROUND-TRIP TEST PASSED. Tested PUT /api/admin/site-settings and GET /api/site-settings with both other_brands_in_stock and product_image_reference_url fields. All 4 test steps passed: (1) PUT with values, (2) GET verified persistence, (3) PUT with cleared values, (4) GET verified updates. No LLM credits used. Backend API working correctly."
+    -agent: "testing"
+    -message: "✅ FONT FIX VERIFIED. Admin 'Generate Gallery + Certificate' endpoint (POST /api/admin/products/{slug}/generate-images) now works correctly with NO 'cannot open resource' font errors. Tested with product 'anti-aging-serum': (1) Gallery generation: 5 images (hero 2048x2048 + 4 tech cards 1200x1200), (2) Certificate generation: test_report_image created, (3) Before/after images: 2 images generated. All images verified: HTTP 200, valid dimensions, non-trivial size. Regression check passed (gallery=false, certificate=true). Font fix working: bundled fonts in /app/backend/fonts/ with fallback loader (bundled → system → load_default). No LLM credits used (Pillow-only). Bug fix is production-ready."
+

@@ -65,9 +65,41 @@ _CREAM_WORDS = (
 
 GREEN = (31, 81, 51)
 GREY = (110, 116, 110)
-F_DIR = "/usr/share/fonts/truetype/liberation"
-F_BOLD = os.path.join(F_DIR, "LiberationSans-Bold.ttf")
-F_REG = os.path.join(F_DIR, "LiberationSans-Regular.ttf")
+
+# Fonts: prefer the BUNDLED copies (shipped with the app so they exist in every
+# deploy), then common system locations, and finally PIL's built-in default so
+# rendering NEVER hard-fails with "cannot open resource".
+_FONTS_LOCAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fonts")
+
+
+def _font_path(name: str) -> str:
+    for d in (
+        _FONTS_LOCAL,
+        "/usr/share/fonts/truetype/liberation",
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/liberation",
+    ):
+        p = os.path.join(d, name)
+        if os.path.exists(p):
+            return p
+    return os.path.join(_FONTS_LOCAL, name)
+
+
+F_BOLD = _font_path("LiberationSans-Bold.ttf")
+F_REG = _font_path("LiberationSans-Regular.ttf")
+
+
+def _truetype(path: str, size: int):
+    """Load a TrueType font, falling back gracefully so a missing system font
+    can never crash image generation."""
+    try:
+        return ImageFont.truetype(path, size)
+    except Exception:
+        try:
+            # try the bundled copy by filename
+            return ImageFont.truetype(os.path.join(_FONTS_LOCAL, os.path.basename(path)), size)
+        except Exception:
+            return ImageFont.load_default()
 
 _cache: dict = {}
 
@@ -146,10 +178,10 @@ def _trim(im: Image.Image) -> Image.Image:
 
 def _fit_font(draw, text, path, max_w, start, floor=11):
     size = start
-    f = ImageFont.truetype(path, size)
+    f = _truetype(path, size)
     while draw.textbbox((0, 0), text, font=f)[2] > max_w and size > floor:
         size -= 1
-        f = ImageFont.truetype(path, size)
+        f = _truetype(path, size)
     return f
 
 

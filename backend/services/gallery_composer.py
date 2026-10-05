@@ -37,11 +37,29 @@ def _persist(img, slug: str, tag: str, cache_filename: str = None) -> str:
         cache_filename=cache_filename,
     )
 
-F_DIR = "/usr/share/fonts/truetype/liberation"
-F_BOLD = os.path.join(F_DIR, "LiberationSans-Bold.ttf")
-F_REG = os.path.join(F_DIR, "LiberationSans-Regular.ttf")
-F_SERIF_B = os.path.join(F_DIR, "LiberationSerif-Bold.ttf")
-F_SERIF_I = os.path.join(F_DIR, "LiberationSerif-Italic.ttf")
+# Fonts: prefer the BUNDLED copies (shipped with the app so they exist in every
+# deploy), then common system locations, and finally PIL's built-in default so
+# gallery/certificate rendering NEVER hard-fails with "cannot open resource".
+_FONTS_LOCAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fonts")
+
+
+def _font_path(name: str) -> str:
+    for d in (
+        _FONTS_LOCAL,
+        "/usr/share/fonts/truetype/liberation",
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/liberation",
+    ):
+        p = os.path.join(d, name)
+        if os.path.exists(p):
+            return p
+    return os.path.join(_FONTS_LOCAL, name)
+
+
+F_BOLD = _font_path("LiberationSans-Bold.ttf")
+F_REG = _font_path("LiberationSans-Regular.ttf")
+F_SERIF_B = _font_path("LiberationSerif-Bold.ttf")
+F_SERIF_I = _font_path("LiberationSerif-Italic.ttf")
 
 GREEN = (31, 81, 51)
 INK = (24, 24, 24)
@@ -51,7 +69,13 @@ W = H = 1200
 
 
 def font(path, size):
-    return ImageFont.truetype(path, size)
+    try:
+        return ImageFont.truetype(path, size)
+    except Exception:
+        try:
+            return ImageFont.truetype(os.path.join(_FONTS_LOCAL, os.path.basename(path)), size)
+        except Exception:
+            return ImageFont.load_default()
 
 
 def _tw(draw, s, fnt, tracking=0):
