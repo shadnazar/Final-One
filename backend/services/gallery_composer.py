@@ -581,7 +581,8 @@ def before_after_pair(slug: str, concern_label: str, audience: str = "") -> dict
 
 
 def generate_gallery_and_certificate(product: dict, do_gallery=True, do_certificate=True,
-                                     do_before_after=True) -> dict:
+                                     do_before_after=True, bottle_override=None,
+                                     hero_url=None) -> dict:
     """Compose gallery cards + certificate (+ before/after) for a product dict.
 
     Returns fields to $set. Every image is stored on Cloudinary under a
@@ -596,7 +597,7 @@ def generate_gallery_and_certificate(product: dict, do_gallery=True, do_certific
     """
     slug = product["slug"]
 
-    bottle = _resolve_bottle(product)
+    bottle = bottle_override if bottle_override is not None else _resolve_bottle(product)
     name = (product.get("short_name") or product.get("name") or "PRODUCT").upper()
     solves = product.get("solves") or product.get("concern_label") or "Common skin concerns for your skin type"
     best_for = product.get("best_for") or product.get("exclusive_for") or "Everyday skincare for all skin types"
@@ -604,15 +605,19 @@ def generate_gallery_and_certificate(product: dict, do_gallery=True, do_certific
 
     result = {}
 
-    # ---- Image 1: crisp hero shot of the approved bottle -------------------
-    hero = None
-    try:
-        from services import brand_bottles
-        hero = _persist(
-            brand_bottles.hero_bytes(product), slug, "hero", f"{slug}-hero.jpg",
-        )
-    except Exception as exc:
-        logger.error(f"[gallery] hero render failed for {slug}: {exc}")
+    # ---- Image 1: hero shot ------------------------------------------------
+    # If an AI-generated (or upscaled) hero URL was supplied, use it verbatim so
+    # the hero and every gallery card share the EXACT same bottle. Otherwise
+    # render a crisp Pillow hero from the approved brand bottle.
+    hero = hero_url
+    if not hero:
+        try:
+            from services import brand_bottles
+            hero = _persist(
+                brand_bottles.hero_bytes(product), slug, "hero", f"{slug}-hero.jpg",
+            )
+        except Exception as exc:
+            logger.error(f"[gallery] hero render failed for {slug}: {exc}")
 
     if do_gallery:
         layouts = [
@@ -651,7 +656,8 @@ def generate_gallery_and_certificate(product: dict, do_gallery=True, do_certific
 
 
 async def generate_and_persist(db, product: dict, do_gallery=True,
-                               do_certificate=True, do_before_after=True) -> dict:
+                               do_certificate=True, do_before_after=True,
+                               bottle_override=None, hero_url=None) -> dict:
     """Async entry point for FastAPI routes.
 
     Pillow composition plus the Cloudinary uploads are CPU/IO bound and fully
@@ -671,5 +677,5 @@ async def generate_and_persist(db, product: dict, do_gallery=True,
         )
     return await asyncio.to_thread(
         generate_gallery_and_certificate, product,
-        do_gallery, do_certificate, do_before_after,
+        do_gallery, do_certificate, do_before_after, bottle_override, hero_url,
     )

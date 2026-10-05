@@ -1153,11 +1153,27 @@ function AdminProducts() {
                             { concern: varConcernSlug, concern_label: concernObj?.name || '' },
                             { headers }
                           );
-                          setVarResult(data);
+                          // Background job — poll until it finishes (24 cards +
+                          // certificates can take ~30-60s; this avoids proxy timeouts).
+                          const jobId = data?.job_id;
+                          let final = data?.result || null;
+                          if (jobId && !final) {
+                            for (let i = 0; i < 90; i++) {
+                              await new Promise(r => setTimeout(r, 2000));
+                              let st;
+                              try {
+                                st = await axios.get(`${API}/admin/products/variations-job/${jobId}`, { headers });
+                              } catch { continue; }
+                              if (st.data?.status === 'completed') { final = st.data.result; break; }
+                              if (st.data?.status === 'failed') { throw new Error(st.data.error || 'Variation generation failed.'); }
+                            }
+                          }
+                          if (!final) throw new Error('Variation generation timed out. Please check the products list — some may have been created.');
+                          setVarResult(final);
                           try { window.dispatchEvent(new Event('admin-data-changed')); } catch {}
                           fetchAll();
                         } catch (e) {
-                          alert(e.response?.data?.detail || 'Variation generation failed.');
+                          alert(e.response?.data?.detail || e.message || 'Variation generation failed.');
                         } finally {
                           setVarRunning(false);
                         }

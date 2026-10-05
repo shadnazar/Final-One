@@ -1103,6 +1103,30 @@ async def generate_product_images(
     return {"success": True, **fields}
 
 
+_variation_jobs: Dict[str, Dict[str, Any]] = {}
+
+
+async def _variation_worker(job_id: str, slug: str, concern_slug: str, concern_label: str):
+    """Run the 24-variation generation in the background so a slow run can never
+    trip the proxy/health-probe timeout (the old cause of intermittent 502/503
+    failures). Progress + the final summary are polled via the status endpoint."""
+    job = _variation_jobs[job_id]
+    try:
+        product = await db.products.find_one({"slug": slug}, {"_id": 0})
+        if not product:
+            job.update(status="failed", error="Product not found")
+            return
+        from services.variation_generator import generate_variations
+        summary = await generate_variations(db, product, concern_slug, concern_label)
+        job.update(status="completed", result=summary,
+                   finished_at=datetime.now(timezone.utc).isoformat())
+    except ValueError as ve:
+        job.update(status="failed", error=str(ve))
+    except Exception as e:
+        logging.error(f"[generate-variations] {slug}: {e}", exc_info=True)
+        job.update(status="failed", error=f"Variation generation failed: {str(e)[:160]}")
+
+
 @router.post("/admin/products/{slug}/generate-variations")
 async def generate_product_variations(
     slug: str,
@@ -1112,8 +1136,9 @@ async def generate_product_variations(
     """Admin: one-click generate the full targeting matrix (2 genders x 3 skin
     types x 4 age groups = 24 shoppable products) from a source product.
 
-    Body: {"concern": "<concern-slug>", "concern_label": "<Readable Concern>"}
-    Every variation reuses the same pure-white bottle photo + shared gallery,
+    Runs as a BACKGROUND job and returns a job_id immediately — poll
+    GET /admin/products/variations-job/{job_id} for progress + the final result.
+    Each variation reuses the source product's ACTUAL hero image (0 AI credits),
     but gets its own title / description / how-to-use + certificate.
     """
     verify_auth(x_admin_token=x_admin_token)
@@ -1121,20 +1146,32 @@ async def generate_product_variations(
     concern_label = (payload.get("concern_label") or "").strip()
     if not concern_slug:
         raise HTTPException(status_code=400, detail="Please choose the concern this product solves.")
-    product = await db.products.find_one({"slug": slug}, {"_id": 0})
+    product = await db.products.find_one({"slug": slug}, {"_id": 1})
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    # A pure-white hero photo is preferred but NOT required — when absent, a clean
-    # placeholder bottle is drawn so the full 24-variation matrix still generates.
-    try:
-        from services.variation_generator import generate_variations
-        summary = await generate_variations(db, product, concern_slug, concern_label)
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
-    except Exception as e:
-        logging.error(f"[generate-variations] {slug}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Variation generation failed: {str(e)[:160]}")
-    return summary
+
+    import uuid as _uuid
+    import asyncio as _aio
+    job_id = f"var_{_uuid.uuid4().hex[:10]}"
+    _variation_jobs[job_id] = {
+        "job_id": job_id, "slug": slug, "concern": concern_slug,
+        "concern_label": concern_label, "status": "running", "result": None,
+        "error": None, "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _aio.create_task(_variation_worker(job_id, slug, concern_slug, concern_label))
+    return {"success": True, "job_id": job_id, "status": "running"}
+
+
+@router.get("/admin/products/variations-job/{job_id}")
+async def generate_variations_status(
+    job_id: str,
+    x_admin_token: str = Header(None, alias="X-Admin-Token"),
+):
+    verify_auth(x_admin_token=x_admin_token)
+    job = _variation_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 

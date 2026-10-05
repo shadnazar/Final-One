@@ -1063,7 +1063,7 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
             logger.warning(f"[img-gen] Pollinations image failed: {e}")
 
     if not out_bytes:
-        return None
+        return None, None
 
     # Always maintain a HIGH-RESOLUTION image: upscale to >= 2048px if smaller.
     # Done in a worker thread so the CPU-heavy PIL work never starves the event
@@ -1095,7 +1095,7 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
                 public_id=f"prod-{uuid.uuid4().hex[:12]}",
             )
             if res.get("url"):
-                return res["url"]
+                return res["url"], out_bytes
     except Exception as e:
         logger.warning(f"[img-gen] Cloudinary upload failed, falling back to local: {e}")
 
@@ -1103,7 +1103,7 @@ async def _ai_generate_product_image(name: str, brand: str, category: str,
     filename = f"prod-{uuid.uuid4().hex[:12]}.{ext}"
     with open(_PROD_IMG_DIR / filename, "wb") as f:
         f.write(out_bytes)
-    return f"/api/uploads/products/{filename}"
+    return f"/api/uploads/products/{filename}", out_bytes
 
 @router.post("/admin/ai/one-click-product")
 async def one_click_product(
@@ -1268,12 +1268,13 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
         return u
 
     image_url = body.image_url
+    hero_bytes_ai = None
     if not image_url and body.generate_image:
         _img_ings = content.get("key_ingredients", "") or (body.key_ingredients or "")
         _img_extra = (f"The formula's hero actives are: {_img_ings}. Reflect the product's essence "
                       "(colour/texture cues) subtly through the packaging design." if _img_ings else "")
         try:
-            image_url = await _ai_generate_product_image(
+            image_url, hero_bytes_ai = await _ai_generate_product_image(
                 name, brand, category_slug or subcategory_slug, extra_prompt=_img_extra)
         except Exception as e:
             logger.warning(f"[one-click] image generation failed (non-fatal): {e}")
@@ -1336,22 +1337,29 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
     # a lab certificate and a BEFORE/AFTER pair (Pillow).
     try:
         from services.gallery_composer import generate_and_persist
+        # Extract the EXACT bottle from the freshly generated AI hero so every
+        # gallery sub-image shows the same bottle as image 1 (no mismatch).
+        ai_bottle = None
+        if hero_bytes_ai:
+            try:
+                from PIL import Image as _PImg
+                import io as _io2
+                from services import brand_bottles as _bb
+                _hero_im = _PImg.open(_io2.BytesIO(hero_bytes_ai)).convert("RGB")
+                ai_bottle = _bb._trim(_bb._alpha_cutout(_hero_im))
+            except Exception as _be:
+                logger.warning(f"[one-click] AI bottle extract failed (using approved bottle): {_be}")
         media = await generate_and_persist(
             _db,
             {**product, "solves": ", ".join(concern_list) or "your skin concern"},
             do_gallery=True, do_certificate=True, do_before_after=True,
+            bottle_override=ai_bottle, hero_url=image_url,
         )
         b_img = media.pop("before_after_before", None)
         a_img = media.pop("before_after_after", None)
-        # Merge images: keep the AI-generated hero as the MAIN image, then append
-        # the gallery sub-images (tech cards). The gallery's own first image is a
-        # Pillow bottle hero — drop it in favour of the AI hero when we have one.
-        gallery_imgs = [u for u in (media.get("images") or []) if u]
-        if image_url and gallery_imgs:
-            media["images"] = [image_url] + gallery_imgs[1:]
-        elif image_url:
-            media["images"] = [image_url]
-        # else: keep the gallery images as-is
+        # The composer already set image 1 to the AI hero (hero_url) and composed
+        # the gallery cards with the SAME extracted bottle, so just rebuild the
+        # gallery alt-text list from the final image set.
         if media.get("images"):
             media["image_gallery"] = [{"url": u, "alt": f"{name} — {brand}"} for u in media["images"]]
         if media:
@@ -1402,10 +1410,13 @@ async def upscale_product_images(
     x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
     admin_session: Optional[str] = Header(None, alias="X-Admin-Session"),
 ):
-    """One-tap AI upscale: boost the resolution/quality of a product's gallery
-    images (hero + tech sub-images). The lab CERTIFICATE and BEFORE/AFTER images
-    are intentionally left untouched. Uses Cloudinary's upscaling delivery
-    transform (e_upscale + 2048px), so it is instant and spends no AI credits."""
+    """One-tap quality boost: serve every product gallery image (hero + tech
+    sub-images + the "how it works" solution card) at Cloudinary's best quality
+    and auto format. The lab CERTIFICATE and BEFORE/AFTER images are left
+    untouched. We intentionally AVOID Cloudinary's generic `e_upscale` here —
+    that algorithm smudges the small label text. Instead we apply only a
+    LOSSLESS-friendly `q_auto:best,f_auto` delivery transform, so text stays
+    razor-sharp. Instant, spends no AI credits."""
     _auth(x_admin_token, admin_session)
     product = await _db.products.find_one({"slug": slug}, {"_id": 0})
     if not product:
@@ -1418,7 +1429,8 @@ async def upscale_product_images(
         pre, post = u.split("/upload/", 1)
         parts = post.split("/", 1)
         rest = parts[1] if len(parts) > 1 and (parts[0].startswith("v") and parts[0][1:].isdigit() or "," in parts[0] or parts[0].startswith(("q_", "f_", "w_", "e_", "c_"))) else post
-        tx = "q_auto:best,f_auto,e_upscale,w_2048,c_limit"
+        # Crisp, non-destructive: best quality + auto format, NO e_upscale.
+        tx = "q_auto:best,f_auto"
         return f"{pre}/upload/{tx}/{rest}"
 
     images = [u for u in (product.get("images") or []) if u]
@@ -1429,6 +1441,9 @@ async def upscale_product_images(
     upd = {"images": new_images, "updated_at": datetime.now(timezone.utc).isoformat()}
     if gallery:
         upd["image_gallery"] = gallery
+    # Also sharpen the "how it works" solution card when present (variations).
+    if product.get("solution_image"):
+        upd["solution_image"] = _upscale_url(product["solution_image"])
     await _db.products.update_one({"slug": slug}, {"$set": upd})
     return {"success": True, "slug": slug, "upscaled": len(new_images), "images": new_images}
 

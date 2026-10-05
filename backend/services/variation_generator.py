@@ -40,15 +40,32 @@ def _slugify(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
 
 
+def _bottle_from_product_image(product: dict):
+    """Extract the product's ACTUAL hero bottle (RGBA) from its first image so
+    every variation card matches the one-click/upscaled hero exactly. Returns
+    (bottle_rgba, hero_url). Falls back to the approved brand bottle + a freshly
+    rendered Pillow hero when the product has no usable image. Spends NO AI
+    credits — pure download + Pillow cut-out."""
+    imgs = [u for u in (product.get("images") or []) if u]
+    if imgs:
+        try:
+            from services import brand_bottles as bb
+            im = gc._load_local_or_remote(imgs[0])
+            return bb._trim(bb._alpha_cutout(im)), imgs[0]
+        except Exception:
+            pass
+    return gc._resolve_bottle(product), None
+
+
 def _compose_shared_gallery(product: dict, base_slug: str, concern_label: str):
     """Compose the 4 Formula-Technology cards ONCE and return
     (image_list, stories, bottle). All 24 variations reference these files.
 
-    The bottle is always one of the two APPROVED brand bottles (resolved by
-    `gallery_composer._resolve_bottle`) with its background cut away, and every
-    card is stored on Cloudinary so the URLs never expire.
+    The bottle + hero are taken from the SOURCE product's own (AI-generated or
+    upscaled) hero image, so variations stay visually identical to it. No AI
+    credits are spent — the hero is reused and the cards are drawn with Pillow.
     """
-    bottle = gc._resolve_bottle(product)
+    bottle, hero_url = _bottle_from_product_image(product)
     name = (product.get("short_name") or product.get("name") or "PRODUCT").upper()
     solves = concern_label
     best_for = "Every skin type, every age \u2014 personalised below"
@@ -59,14 +76,17 @@ def _compose_shared_gallery(product: dict, base_slug: str, concern_label: str):
         gc._layout_c(bottle, *stories[2], solves, best_for),
         gc._layout_d(bottle, *stories[3], solves, best_for),
     ]
-    # Image 1 is a crisp, freshly rendered hero shot of the approved bottle.
     imgs = []
-    try:
-        from services import brand_bottles
-        imgs.append(gc._persist(brand_bottles.hero_bytes(product), base_slug,
-                                "var-hero", f"{base_slug}-var-hero.jpg"))
-    except Exception:
-        pass
+    # Image 1 = the source product's ACTUAL hero (reused verbatim, 0 credits).
+    if hero_url:
+        imgs.append(hero_url)
+    else:
+        try:
+            from services import brand_bottles
+            imgs.append(gc._persist(brand_bottles.hero_bytes(product), base_slug,
+                                    "var-hero", f"{base_slug}-var-hero.jpg"))
+        except Exception:
+            pass
     for i, img in enumerate(layouts, start=1):
         imgs.append(gc._persist(img, base_slug, f"var-tech{i}",
                                 f"{base_slug}-var-tech{i}.jpg"))

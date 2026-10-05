@@ -212,7 +212,7 @@ async def _save_photo(jid: str, name: str, image_b64: str) -> str:
     try:
         from services import durable_images
         return await durable_images.save_image(
-            _db, raw, slug=f"journey-{jid}", tag=name,
+            db, raw, slug=f"journey-{jid}", tag=name,
             folder="celesta-glow/journeys",
         )
     except Exception as exc:
