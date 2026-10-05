@@ -40,6 +40,17 @@ Fixed the 3 open image-generation issues:
 
 Verified via curl + image inspection on preview. Test QA product + variations cleaned up.
 
+## Changelog — 2026-10-05 (combo live/TBL fix)
+**Bug:** A combo set LIVE in admin still showed "to be launched / coming soon" on the user app.
+**Root cause (frontend):** `kitIsTbl = ... || productsInKit.length === 0 || ...` — the combo was
+forced TBL whenever its member products weren't present in the page's limited product fetch
+(homepage loads only 20 skin-care products; slow loads; members outside the loaded niche).
+**Fix:** Removed the `length === 0` term in all 3 render spots — `pages/Homepage.js` (~565),
+`pages/ShopPage.js` (~441 completeKit, ~702 combo grid). A combo is now TBL only if the combo's
+own `is_to_be_launched` flag is set, OR a RESOLVED member product is genuinely TBL. The cart-side
+`isComboTbl()` helper was already correct. Verified on /shop: combos render "ADD KIT" (buyable);
+the only TBL-text left is the filter chips.
+
 ## Backlog / future (P2)
 - Let admin re-run generate-images on OLD existing products to bring their sub-images in sync
   with the new AI-hero-matching logic (one-off migration button could batch this).

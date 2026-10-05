@@ -436,9 +436,11 @@ function ShopPage() {
                     </div>
 
                     {(() => {
-                      // The kit is TBL if the combo itself OR any underlying product is TBL.
+                      // The kit is TBL only if the combo itself is TBL, OR a
+                      // RESOLVED underlying product is TBL. An unresolved product
+                      // list must NOT force TBL (a live combo stays buyable).
                       const productsInKit = (completeKit.product_slugs || []).map(s => products.find(p => p.slug === s)).filter(Boolean);
-                      const kitIsTbl = !!completeKit.is_to_be_launched || productsInKit.length === 0 || productsInKit.some(p => p.is_to_be_launched);
+                      const kitIsTbl = !!completeKit.is_to_be_launched || productsInKit.some(p => p.is_to_be_launched);
                       if (kitIsTbl) {
                         return (
                           <button
@@ -699,7 +701,9 @@ function ShopPage() {
                           </div>
                           {(() => {
                             const slugsInCombo = (combo.product_slugs || []).map(s => products.find(p => p.slug === s)).filter(Boolean);
-                            const comboIsTbl = combo.is_to_be_launched || slugsInCombo.length === 0 || slugsInCombo.some(p => p.is_to_be_launched);
+                            // Only a RESOLVED TBL member (or the combo's own flag)
+                            // marks it TBL — an unresolved list no longer forces it.
+                            const comboIsTbl = combo.is_to_be_launched || slugsInCombo.some(p => p.is_to_be_launched);
                             if (comboIsTbl) {
                               return (
                                 <button

@@ -560,9 +560,13 @@ function Homepage() {
                     </div>
 
                     {(() => {
-                      // The kit is TBL if the combo itself OR any underlying product is TBL.
+                      // The kit is TBL only if the combo itself is TBL, OR a
+                      // RESOLVED underlying product is TBL. An empty/unresolved
+                      // product list (e.g. members not in the limited homepage
+                      // fetch, or still loading) must NOT force TBL — otherwise a
+                      // live combo wrongly shows "coming soon" on the storefront.
                       const productsInKit = (kit.product_slugs || []).map(s => products.find(p => p.slug === s)).filter(Boolean);
-                      const kitIsTbl = !!kit.is_to_be_launched || productsInKit.length === 0 || productsInKit.some(p => p.is_to_be_launched);
+                      const kitIsTbl = !!kit.is_to_be_launched || productsInKit.some(p => p.is_to_be_launched);
                       if (kitIsTbl) {
                         return (
                           <button
