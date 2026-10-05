@@ -943,135 +943,155 @@ def _bottle_kind(name: str, category: str) -> str:
 
 async def _ai_generate_product_image(name: str, brand: str, category: str,
                                      ref_images: Optional[list] = None,
-                                     extra_prompt: str = "",
-                                     size: str = "",
-                                     variant: str = "front",
-                                     tag: str = "hero",
-                                     benefits: Optional[list] = None) -> Optional[str]:
-    """Generate a brand-NEW product image with Gemini (Nano Banana), using the
-    reference bottle photo ONLY as a design guide, on a STRICT pure-white
-    background.
+                                     extra_prompt: str = "") -> Optional[str]:
+    """Generate a photorealistic product image with GEMINI and persist it.
 
-    ``variant`` changes the framing so the hero + sub images look like a neat
-    matching set: 'front' (straight-on), 'angle' (three-quarter), 'detail'
-    (closer crop). ``tag`` controls the Cloudinary public_id suffix so each
-    generated image is stored separately.
+    Ported from the brand's earlier project so the output matches the approved
+    sample look exactly. Provider chain:
+      1. Gemini "Nano Banana" image model via Emergent LLM key (uses the brand's
+         THEME reference images so output matches the sample look exactly).
+      2. Direct Google Gemini (GEMINI_API_KEY).
+      3. Pollinations (free) as a last-resort fallback.
+    The result is upscaled to a high resolution, then saved to Cloudinary if
+    configured, else to local /api/uploads/products/. Returns a public URL.
     """
-    api_key = os.environ.get("EMERGENT_LLM_KEY", "")
-    if not api_key:
-        logger.error("[img-gen] EMERGENT_LLM_KEY not configured — cannot AI-generate product image")
-        return None
-
-    kind = _bottle_kind(name, category)
-
-    # Resolve the reference bottle URL for this product's kind.
-    ref_url = None
-    if ref_images:
-        ref_url = ref_images[0] if isinstance(ref_images, list) else ref_images
-    if not ref_url and _db is not None:
+    import base64 as _b64
+    # Auto-load the brand THEME reference images (the samples the admin provided)
+    # so every generated product matches the exact studio style.
+    if ref_images is None:
+        ref_images = []
         try:
-            _ss = await _db.site_settings.find_one(
-                {"_id": "main"},
-                {"_id": 0,
-                 "product_image_reference_serum_url": 1,
-                 "product_image_reference_cream_url": 1,
-                 "product_image_reference_url": 1},
-            ) or {}
-            ref_url = (
-                (_ss.get(f"product_image_reference_{kind}_url") or "").strip()
-                or (_ss.get("product_image_reference_url") or "").strip()
-                or None
-            )
+            _theme_dir = _Path(__file__).parent.parent / "uploads" / "theme_refs"
+            for _f in sorted(_theme_dir.glob("*.png")) + sorted(_theme_dir.glob("*.jpg")):
+                try:
+                    ref_images.append(_f.read_bytes())
+                except Exception:
+                    pass
         except Exception:
-            ref_url = None
-    if not ref_url:
-        ref_url = _DEFAULT_REF_BOTTLES.get(kind) or _DEFAULT_REF_BOTTLES["serum"]
+            pass
 
-    # Keep it SIMPLE: hand Gemini the reference bottle + product name + a few
-    # ingredients to highlight, and let the AI handle the label layout, style and
-    # background exactly like the reference. No micro-managing the layout.
-    product_name = (name or "Advanced Formula").strip()
-    brand_name = (brand or "Celesta Glow").strip()
-    actives = re.sub(r"\s+", " ", (extra_prompt or "")).strip()
-    actives = re.sub(r"\s*\d+(\.\d+)?%", "", actives)  # drop % strengths
-    # keep only the first few ingredients to highlight
-    highlight = ", ".join([a.strip() for a in actives.split(",") if a.strip()][:3])
-    size_txt = (size or "").strip()
-
-    # Hero = front view; sub images = a different angle / closer crop.
-    view_map = {
-        "front":  "a clean straight-on front view",
-        "angle":  "a slightly different three-quarter angle",
-        "detail": "a closer crop of the bottle",
-    }
-    view = view_map.get(variant, view_map["front"])
-
+    ings = (extra_prompt or "").strip()
     prompt = (
-        f"This is our reference product bottle. Create a new, photorealistic e-commerce product "
-        f"photo of the SAME bottle for a {brand_name} product called \"{product_name}\". "
-        f"Keep the exact same bottle shape, label layout, typography style, colours and the soft "
-        f"studio background style as the reference image — only change the product name on the label "
-        f"to \"{product_name}\""
-        + (f" and show these key ingredients highlighted on the label: {highlight}." if highlight else ".")
-        + f" Show {view} with the bottle centred and fully visible (nothing cut off). "
-        f"High quality, premium, clean and neat — just like the reference."
+        "Professional product photography on a PURE WHITE background (#FFFFFF). The background must be completely "
+        "white with no shadows, no gradients, no textures, no grey tones, no off-white. Solid pure white background "
+        "only. Studio lighting. Clean white seamless backdrop. "
+        f"Ultra-clean e-commerce product photograph of a single {brand} skincare {category or 'product'}: '{name}'. "
+        "STYLE (match exactly): one pristine WHITE pump bottle standing upright, perfectly centred, with a large "
+        "translucent glossy SERUM GEL DROPLET / swirl and a few smaller clear serum droplets arranged BEHIND and "
+        "beside the bottle (visible around the edges of the bottle) on a seamless PURE-WHITE (#FFFFFF) studio "
+        "background, soft even diffused lighting, NO grounding shadow, minimalist high-end clinical beauty aesthetic, "
+        "1:1 square. The serum drops must look like real transparent skincare gel, subtly tinted, never opaque. "
+        "The bottle label is printed in an elegant minimalist layout using GREEN and grey text: the vertical brand "
+        f"wordmark 'CELESTA GLOW', then the product name '{name}', a formula line, "
+        + (f"the key ingredients ({ings}), " if ings else "the key ingredients, ")
+        + "a few short benefit bullets, 'FOR ALL SKIN TYPES' and the pack size. "
+        "Photorealistic, sharp focus, no hands, no extra props, no busy background."
     )
+    if ref_images:
+        prompt = ("Recreate the EXACT visual style, white background, lighting, green+grey typography and "
+                  "composition of the provided reference product images, but for THIS product. " + prompt)
 
-    # Download the reference bottle (bytes → image input for the AI).
-    try:
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _hc:
-            _r = await _hc.get(ref_url)
-            _r.raise_for_status()
-            ref_bytes = _r.content
-    except Exception as e:
-        logger.error(f"[img-gen] could not download reference bottle ({ref_url}): {e}")
-        return None
-
-    # STRICT: image generation uses ONLY the direct GEMINI API KEY (Google GenAI
-    # SDK, model gemini-2.5-flash-image = "Nano Banana"), with the reference
-    # bottle as the image input. No other provider is used.
     out_bytes = None
     mime = "image/png"
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    if not gemini_key:
-        logger.error("[img-gen] GEMINI_API_KEY not configured — product image generation requires it")
-        return None
-    try:
-        import asyncio as _asyncio
-        from google import genai
-        from google.genai import types as _gtypes
-        client = genai.Client(api_key=gemini_key)
-        parts = [prompt, _gtypes.Part.from_bytes(data=ref_bytes, mime_type="image/jpeg")]
 
-        def _gen():
-            return client.models.generate_content(model="gemini-2.5-flash-image", contents=parts)
+    # 1) Gemini Nano Banana via Emergent LLM key (image-out modality)
+    emergent_key = os.environ.get("EMERGENT_LLM_KEY")
+    if emergent_key:
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+            file_contents = []
+            for rb in (ref_images or []):
+                try:
+                    file_contents.append(ImageContent(_b64.b64encode(rb).decode("utf-8")))
+                except Exception:
+                    pass
+            chat = LlmChat(
+                api_key=emergent_key, session_id=f"prodimg-{uuid.uuid4().hex[:8]}",
+                system_message="You are a skincare-brand visual designer that produces photorealistic, premium product images on a clean white background.",
+            )
+            chat.with_model("gemini", "gemini-3.1-flash-image-preview").with_params(modalities=["image", "text"])
+            msg = UserMessage(text=prompt, file_contents=file_contents or None)
+            _text, images = await chat.send_message_multimodal_response(msg)
+            if images:
+                out_bytes = _b64.b64decode(images[0]["data"])
+                mime = images[0].get("mime_type", "image/png")
+        except Exception as e:
+            logger.warning(f"[img-gen] Gemini(Emergent) image failed: {e}")
 
-        resp = await _asyncio.to_thread(_gen)
-        for part in (resp.candidates[0].content.parts if getattr(resp, "candidates", None) else []):
-            inline = getattr(part, "inline_data", None)
-            if inline and getattr(inline, "data", None):
-                out_bytes = inline.data
-                mime = inline.mime_type or "image/png"
-                break
-    except Exception as e:
-        logger.error(f"[img-gen] Gemini image generation failed for '{product_name}': {str(e)[:160]}")
+    # 2) Direct Google Gemini (GEMINI_API_KEY)
+    if not out_bytes:
+        gkey = os.environ.get("GEMINI_API_KEY")
+        if gkey:
+            try:
+                from google import genai
+                from google.genai import types as _gt
+                client = genai.Client(api_key=gkey)
+                parts = [prompt]
+                for rb in (ref_images or []):
+                    parts.append(_gt.Part.from_bytes(data=rb, mime_type="image/png"))
+                resp = client.models.generate_content(model="gemini-2.5-flash-image", contents=parts)
+                for part in (resp.candidates[0].content.parts if resp.candidates else []):
+                    inline = getattr(part, "inline_data", None)
+                    if inline and getattr(inline, "data", None):
+                        out_bytes = inline.data
+                        mime = inline.mime_type or "image/png"
+                        break
+            except Exception as e:
+                logger.warning(f"[img-gen] Gemini(direct) image failed: {e}")
+
+    # 3) Pollinations (free, text-only) as final fallback
+    if not out_bytes:
+        try:
+            import httpx as _httpx
+            from urllib.parse import quote as _q
+            url = (
+                f"https://image.pollinations.ai/prompt/{_q(prompt)}"
+                f"?width=1024&height=1024&model=flux&nologo=true&enhance=true&seed={uuid.uuid4().int % 10_000_000}"
+            )
+            async with _httpx.AsyncClient(timeout=90.0, follow_redirects=True) as hc:
+                r = await hc.get(url)
+                if r.status_code == 200 and r.content and len(r.content) > 1024:
+                    out_bytes = r.content
+                    mime = r.headers.get("content-type", "image/jpeg").split(";")[0]
+        except Exception as e:
+            logger.warning(f"[img-gen] Pollinations image failed: {e}")
 
     if not out_bytes:
-        logger.error(f"[img-gen] Gemini returned no image for '{product_name}'")
         return None
 
+    # Always maintain a HIGH-RESOLUTION image: upscale to >= 2048px if smaller.
     try:
-        from services import durable_images
-        return await durable_images.save_image(
-            _db, out_bytes,
-            slug=_slugify(name), tag=tag,
-            folder="celesta-glow/generated",
-        )
+        from PIL import Image as _Img
+        import io as _io
+        _im = _Img.open(_io.BytesIO(out_bytes)).convert("RGB")
+        if max(_im.size) < 2048:
+            _scale = 2048 / max(_im.size)
+            _im = _im.resize((int(_im.width * _scale), int(_im.height * _scale)), _Img.LANCZOS)
+        _buf = _io.BytesIO()
+        _im.save(_buf, "JPEG", quality=95, subsampling=0, optimize=True, progressive=True)
+        out_bytes = _buf.getvalue()
+        mime = "image/jpeg"
     except Exception as e:
-        logger.error(f"[img-gen] durable save failed for '{name}': {e}")
-        return None
+        logger.warning(f"[img-gen] high-res upscale skipped: {e}")
 
+    # Persist — Cloudinary first, else local
+    try:
+        from services import cloudinary_service as _cs
+        if await _cs.ensure_configured(_db):
+            res = await _cs.upload_image(
+                _db, out_bytes, folder="celesta-glow/products",
+                public_id=f"prod-{uuid.uuid4().hex[:12]}",
+            )
+            if res.get("url"):
+                return res["url"]
+    except Exception as e:
+        logger.warning(f"[img-gen] Cloudinary upload failed, falling back to local: {e}")
+
+    ext = "png" if "png" in mime else "jpg"
+    filename = f"prod-{uuid.uuid4().hex[:12]}.{ext}"
+    with open(_PROD_IMG_DIR / filename, "wb") as f:
+        f.write(out_bytes)
+    return f"/api/uploads/products/{filename}"
 
 @router.post("/admin/ai/one-click-product")
 async def one_click_product(
@@ -1234,37 +1254,17 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
         return u
 
     image_url = body.image_url
-    ai_images = []
     if not image_url and body.generate_image:
-        # Clean actives only (comma-separated) for the label — no prose sentence.
         _img_ings = content.get("key_ingredients", "") or (body.key_ingredients or "")
-        _img_size = content.get("size", "") or (body.size_hint or "")
-        _img_benefits = content.get("benefits") or []
-        _refs = [body.reference_image_url] if body.reference_image_url else None
+        _img_extra = (f"The formula's hero actives are: {_img_ings}. Reflect the product's essence "
+                      "(colour/texture cues) subtly through the packaging design." if _img_ings else "")
         try:
             image_url = await _ai_generate_product_image(
-                name, brand, category_slug or subcategory_slug,
-                ref_images=_refs, extra_prompt=_img_ings, size=_img_size,
-                variant="front", tag="hero", benefits=_img_benefits)
+                name, brand, category_slug or subcategory_slug, extra_prompt=_img_extra)
         except Exception as e:
-            logger.warning(f"[one-click] hero image generation failed (non-fatal): {e}")
+            logger.warning(f"[one-click] image generation failed (non-fatal): {e}")
             image_url = None
-        # Sub images — same reference bottle, neat matching style, slightly
-        # different framing so the product gallery is a clean matching set.
-        for _variant in ("angle", "detail"):
-            try:
-                _sub = await _ai_generate_product_image(
-                    name, brand, category_slug or subcategory_slug,
-                    ref_images=_refs, extra_prompt=_img_ings, size=_img_size,
-                    variant=_variant, tag=f"sub-{_variant}", benefits=_img_benefits)
-                if _sub:
-                    ai_images.append(_sub)
-            except Exception as e:
-                logger.warning(f"[one-click] sub-image '{_variant}' failed (non-fatal): {e}")
     image_url = _cld_hq(image_url)
-    ai_images = [_cld_hq(u) for u in ai_images]
-    # Final ordered image set: AI hero first, then the AI sub images.
-    final_images = [u for u in [image_url] + ai_images if u]
 
     # ---------- 4. CREATE PRODUCT ----------
     base_slug = _slugify(name)
@@ -1290,8 +1290,8 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
         "benefits": content.get("benefits", []) if isinstance(content.get("benefits"), list) else [],
         "how_to_use": content.get("how_to_use", ""),
         "size": content.get("size", ""),
-        "images": final_images,
-        "image_gallery": [{"url": u, "alt": f"{name} — {brand}"} for u in final_images],
+        "images": [image_url] if image_url else [],
+        "image_gallery": [{"url": image_url, "alt": f"{name} — {brand}"}] if image_url else [],
         "mrp": float(mrp),
         "prepaid_price": float(offer),
         "cod_price": float(offer),
@@ -1317,21 +1317,19 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
     }
     await _db.products.insert_one(product)
 
-    # ---------- 4b. STRUCTURED MEDIA (certificate + before/after) ----------
-    # We do NOT run the Pillow gallery here — the product photos are the
-    # Gemini-generated hero + sub images. We still attach a lab certificate and a
-    # BEFORE/AFTER pair (Pillow). After that we re-assert the AI image set so the
-    # Pillow hero can never override the Gemini images.
+    # ---------- 4b. STRUCTURED MEDIA (gallery + certificate + before/after) ----------
+    # Every one-click product automatically gets the Formula-Technology gallery,
+    # a lab certificate and a BEFORE/AFTER pair (Pillow).
     try:
         from services.gallery_composer import generate_and_persist
         media = await generate_and_persist(
             _db,
             {**product, "solves": ", ".join(concern_list) or "your skin concern"},
-            do_gallery=False, do_certificate=True, do_before_after=True,
+            do_gallery=True, do_certificate=True, do_before_after=True,
         )
         b_img = media.pop("before_after_before", None)
         a_img = media.pop("before_after_after", None)
-        media.pop("images", None)  # never let the Pillow hero override the AI images
+        media.pop("images", None)  # keep the AI hero image as the main product photo
         if media:
             await _db.products.update_one({"slug": slug}, {"$set": {**media, "updated_at": now_iso}})
             product.update(media)
@@ -1349,16 +1347,6 @@ Tone: trustworthy, clinical-but-warm, India-aware. Avoid "miracle"/"instant cure
             )
     except Exception as e:
         logger.warning(f"[one-click] structured media generation failed for {slug}: {e}")
-
-    # Re-assert the Gemini image set (hero + subs) as the source of truth.
-    if final_images:
-        ai_gallery = [{"url": u, "alt": f"{name} — {brand}"} for u in final_images]
-        await _db.products.update_one(
-            {"slug": slug},
-            {"$set": {"images": final_images, "image_gallery": ai_gallery, "updated_at": now_iso}},
-        )
-        product["images"] = final_images
-        product["image_gallery"] = ai_gallery
 
     # Fire-and-forget AI reviews
     try:
